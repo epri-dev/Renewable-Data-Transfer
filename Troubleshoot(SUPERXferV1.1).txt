@@ -1,0 +1,10 @@
+Troubleshoot Document: (For SUPERXferV1.1)
+
+1. If issues in log_data_from_pi_new, then switch the log_data_from_pi_new to log_data_from_pi in line 290 (in start function) and 214 (in catch_up_new_tags function)
+
+2. If issues in the convert_tracker_list, then look for these things:
+	a. check the flag in the constants.env, 
+		i. check if the flag is reading correctly in the code, (it has to be integer '1' or '0' to be fed into logic. 
+	b. check the convert_tracker_list, and/or switch to the old list, and then start to pull. 
+3. If issues in the log file upload, comment out the code
+4. If issues in the pbar, then comment out all the pbar lines. 
