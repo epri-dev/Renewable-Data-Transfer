@@ -66,6 +66,7 @@ def process_excel_performance(input_file, tags_df):
     combined_df = pd.concat([output_df.reset_index(drop=True), tags_df.reset_index(drop=True)], axis=1)
     channel_list_df=combined_df
     return channel_list_df
+
 def extract_tags_tracker(input_file):
     df = pd.read_excel(input_file, header=None,sheet_name='Tracker_Tags')
 
@@ -105,3 +106,37 @@ def convert_channel_list(input_file):
 def convert_tracker_list(input_file):
     channel_list_tracker_df=extract_tags_tracker(input_file)
     return channel_list_tracker_df
+
+def extract_tags_best(input_file):
+    df = pd.read_excel(input_file, header=None,sheet_name='BEST_Tags')
+
+    tag_names = [
+        "PlantName",
+        "PI Server Name",
+        "Plant Start (COD)",
+        "BEST Tags",
+    ]
+    tag_header_row_index = None
+    for i in range(len(df)):
+        row_values = df.iloc[i].astype(str).tolist()
+        if any(tag in row_values for tag in tag_names):
+            tag_header_row_index = i
+            break
+
+    if tag_header_row_index is None:
+        raise ValueError("Tag header row not found.")
+    tag_row = df.iloc[tag_header_row_index].astype(str)
+    tag_col_indices = {
+        tag: tag_row[tag_row == tag].index[0]
+        for tag in tag_names if tag in tag_row.values
+    }
+    extracted_columns = {}
+    for tag, col_idx in tag_col_indices.items():
+        extracted_columns[tag] = df.iloc[tag_header_row_index:, col_idx].reset_index(drop=True)
+    tags_df_best = pd.DataFrame(extracted_columns)
+    tags_df_best = tags_df_best.drop(index=0)
+    return tags_df_best
+
+def convert_best_list(input_file):
+    channel_list_best_df=extract_tags_best(input_file)
+    return channel_list_best_df
