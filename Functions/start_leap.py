@@ -337,7 +337,8 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
 def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end_time,
                      plant, turbine, log_excel_path, server_name, output_dir,
                      interval, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path):
-
+    tag_mapping_df = pd.read_csv(tag_mapping_path)
+    tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time) + timedelta(minutes=interval))
 
@@ -349,7 +350,6 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
     results = []
     plant_level_results = []
 
-    time_index = pd.date_range(start=start_time, end=end_time, freq=f"{interval}min")
 
 
     with PI.PIServer(server=server_name) as server:
@@ -380,7 +380,7 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
             'STD_DEV': f'{tag}_std'
         }, inplace=True)       
 
-        results.append(df)
+        results.append(df.rename(columns=tag_mapping_dict,inplace=True))
 
 
     if op_tag:
@@ -401,7 +401,7 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
 
 
         if df is not None:
-            results.append(df)
+            results.append(df.rename(columns=tag_mapping_dict,inplace=True))
 
 
     if turbine == "PlantLevel" and plant_level_tag:
@@ -423,7 +423,7 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
                 'STD_DEV': f'{plant_level_tag}_std'
             }, inplace=True)
 
-        plant_level_results.append(df)
+        plant_level_results.append(df.rename(columns=tag_mapping_dict,inplace=True))
 
     if results:
         log_data = results[0]
@@ -486,12 +486,7 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
         if plant_level_tag:
             all_logged_tags.add(plant_level_tag)
         for tag in all_logged_tags:
-            log_tag_details(
-                plant,
-                tag,
-                last_upload_time,
-                log_excel_path
-            )
+            log_tag_details(plant,tag,last_upload_time,log_excel_path)
         if os.path.exists(plant_zip_path):
             os.remove(plant_zip_path)
         if os.path.exists(turbine_zip_path):
@@ -500,3 +495,4 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
     else:
         print("Please Retry, Problem in SFTP connection")
         return
+# =============================================================================

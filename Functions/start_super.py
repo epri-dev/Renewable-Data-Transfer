@@ -329,6 +329,9 @@ def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, serve
     log_data = log_data.reset_index(names='timestamp')
     log_data['timestamp'] = pd.to_datetime(log_data['timestamp']).dt.round('s')
     log_data.iloc[:, 1:] = log_data.iloc[:, 1:].apply(pd.to_numeric, errors='coerce')
+    tag_mapping_df = pd.read_csv(tag_mapping_path)
+    tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
+    log_data.rename(columns=tag_mapping_dict, inplace=True)
 
 
     current_time= datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
@@ -356,4 +359,6 @@ def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, serve
     else:
         print("Please Retry, Problem in SFTP connection")
         return
+
+
 # =============================================================================
