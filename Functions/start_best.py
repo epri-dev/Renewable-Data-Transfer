@@ -61,7 +61,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
     USE_SSH_KEY = bool(int(secrets.get('USE_SSHKEY', 0)))
     SLEEP_TIME = int(secrets.get('SLEEP_TIME', 30))
     MAX_COUNT = int(secrets.get('MAX_COUNT', 3))
-    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER')
+    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER_BEST')
     HOST = secrets.get('SFTP_HOST')
     USERNAME = secrets.get('SFTP_USERNAME')
 
@@ -332,7 +332,7 @@ def log_data_from_pi_new(tags_df, start_time, end_time, plant, log_excel_path, s
     log_data.rename(columns=lambda x: x.split('\\')[-1], inplace=True)
     log_data = log_data.reset_index(names='timestamp')
     log_data.iloc[:, 1:] = log_data.iloc[:, 1:].apply(pd.to_numeric, errors='coerce')
-    tag_mapping_df = pd.read_excel(tag_mapping_path)
+    tag_mapping_df = pd.read_csv(tag_mapping_path)
     tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
     log_data.rename(columns=tag_mapping_dict, inplace=True)
 
@@ -349,6 +349,7 @@ def log_data_from_pi_new(tags_df, start_time, end_time, plant, log_excel_path, s
     # Upload the CSV via SFTP
     sftp_success = upload_via_sftp(output_csv_path,secret_path,log_sftp_path,SSH_KEY_PATH)
     print(f"BEST Data Pulled for '{plant}', {pd.to_datetime(start_time).date()}, save to '{filename}'...")
+    #sftp_success=True
     if sftp_success is True:
         os.remove(output_csv_path)
         log_tag_details(plant, tags, log_data, log_excel_path)

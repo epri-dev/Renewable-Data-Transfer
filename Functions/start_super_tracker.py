@@ -306,20 +306,21 @@ def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, serve
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time)+timedelta(minutes=interval))
     tags = tags_df.values.flatten().tolist()
+    tags=[t.replace("\\","") for t in tags]
 
     with PI.PIServer(server=server_name) as server:
         points = server.search(tags)
 
     try:
-        temp = [point.summaries(start_time, end_time, f'{interval}m',
-                                SummaryType.AVERAGE,
+        temp = [point.summaries(start_time, end_time, f'{interval}d',
+                                SummaryType.STD_DEV,
                                 calculation_basis=CalculationBasis.TIME_WEIGHTED,
                                 time_type=TimestampCalculation.EARLIEST_TIME)
                 for point in points]
     except:
         time.sleep(1800)  # Wait for 30 minutes before retrying
-        temp = [point.summaries(start_time, end_time, f'{interval}m',
-                                SummaryType.AVERAGE,
+        temp = [point.summaries(start_time, end_time, f'{interval}d',
+                                SummaryType.STD_DEV,
                                 calculation_basis=CalculationBasis.TIME_WEIGHTED,
                                 time_type=TimestampCalculation.EARLIEST_TIME)
                 for point in points]
@@ -347,6 +348,7 @@ def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, serve
     sftp_success=upload_via_sftp(zip_file_path,secret_path,log_sftp_path,SSH_KEY_PATH)
     print(f"Data Transferred for '{plant}', {pd.to_datetime(start_time).date()}, Log files updated.")
     time.sleep(1)
+    #sftp_success=True
     if sftp_success==True:
         os.remove(zip_file_path)
         for tag in tags:

@@ -57,7 +57,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
     USE_SSH_KEY = bool(int(secrets.get('USE_SSHKEY', 0)))
     SLEEP_TIME = int(secrets.get('SLEEP_TIME', 30))
     MAX_COUNT = int(secrets.get('MAX_COUNT', 3))
-    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER')
+    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER_SUPER')
     HOST = secrets.get('SFTP_HOST')
     USERNAME = secrets.get('SFTP_USERNAME')
 
@@ -222,6 +222,7 @@ def start_super(tag_list_path, log_file_path, data_file_max_length, interval, ou
     if channel_list_version_flag==1:
         df=convert_channel_list(tag_list_path)
     else: df=df
+    df.to_csv('temp.csv')
     
     df['PlantName'] = df['PlantName'].ffill()  # Forward fill plant names and start dates
     df['ServerName'] = df['PI Server Name'].ffill() # Forward fill SERVERNAME
@@ -271,7 +272,7 @@ def start_super(tag_list_path, log_file_path, data_file_max_length, interval, ou
         end_date = get_utc_time(end_date)  # Convert to UTC
 
         tags = []
-        for col in group.columns[5:-1]:
+        for col in group.columns[4:-1]:
             transposed_column = group[col].tolist()
             tags.extend(transposed_column)
         
@@ -307,6 +308,7 @@ def start_super(tag_list_path, log_file_path, data_file_max_length, interval, ou
 def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path):
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time)+timedelta(minutes=interval))
+
     tags = tags_df.values.flatten().tolist()
     with PI.PIServer(server=server_name) as server:
         points = server.search(tags)
@@ -351,6 +353,7 @@ def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, serve
     sftp_success=upload_via_sftp(zip_file_path,secret_path,log_sftp_path,SSH_KEY_PATH)
     print(f"Data Transferred for '{plant}', {pd.to_datetime(start_time).date()}, Log files updated.")
     time.sleep(1)
+    #sftp_success=True
     if sftp_success==True:
         os.remove(zip_file_path)
         for tag in tags:

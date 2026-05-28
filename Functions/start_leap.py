@@ -57,7 +57,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
     USE_SSH_KEY = bool(int(secrets.get('USE_SSHKEY', 0)))
     SLEEP_TIME = int(secrets.get('SLEEP_TIME', 30))
     MAX_COUNT = int(secrets.get('MAX_COUNT', 3))
-    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER')
+    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER_LEAP')
     HOST = secrets.get('SFTP_HOST')
     USERNAME = secrets.get('SFTP_USERNAME')
 
@@ -341,6 +341,8 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
     tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time) + timedelta(minutes=interval))
+    turbine_zip_path=''
+    plant_zip_path=''
 
     tags = list(tags)
     op_tag = operating_state_tag
@@ -374,13 +376,13 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
         )
         df = summaries.reset_index()
         df.rename(columns={
-            'AVERAGE': f'{tag}_avg',
-            'MINIMUM': f'{tag}_min',
-            'MAXIMUM': f'{tag}_max',
-            'STD_DEV': f'{tag}_std'
+            'AVERAGE': f'{tag}_Avg',
+            'MINIMUM': f'{tag}_Min',
+            'MAXIMUM': f'{tag}_Max',
+            'STD_DEV': f'{tag}_StD'
         }, inplace=True)       
 
-        results.append(df.rename(columns=tag_mapping_dict,inplace=True))
+        results.append(df.rename(columns=tag_mapping_dict))
 
 
     if op_tag:
@@ -395,13 +397,13 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
                 time_type=TimestampCalculation.EARLIEST_TIME
             )
             df = summaries.reset_index()
-            df.rename(columns={'AVERAGE': f'{op_tag}_avg'}, inplace=True)
+            df.rename(columns={'AVERAGE': f'{op_tag}_Avg'})
         else:
             df = None
 
 
         if df is not None:
-            results.append(df.rename(columns=tag_mapping_dict,inplace=True))
+            results.append(df.rename(columns=tag_mapping_dict))
 
 
     if turbine == "PlantLevel" and plant_level_tag:
@@ -417,13 +419,13 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
             )
             df = summaries.reset_index()
             df.rename(columns={
-                'AVERAGE': f'{plant_level_tag}_avg',
-                'MINIMUM': f'{plant_level_tag}_min',
-                'MAXIMUM': f'{plant_level_tag}_max',
-                'STD_DEV': f'{plant_level_tag}_std'
+                'AVERAGE': f'{plant_level_tag}_Avg',
+                'MINIMUM': f'{plant_level_tag}_Min',
+                'MAXIMUM': f'{plant_level_tag}_Max',
+                'STD_DEV': f'{plant_level_tag}_StD'
             }, inplace=True)
 
-        plant_level_results.append(df.rename(columns=tag_mapping_dict,inplace=True))
+        plant_level_results.append(df.rename(columns=tag_mapping_dict))
 
     if results:
         log_data = results[0]
@@ -451,13 +453,13 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
 
     if plant_level_results:
         plant_level_data = plant_level_results[0]
-
+        plant_level_data= plant_level_data.rename(columns={"index": "timestamp"})
         plant_level_data['timestamp'] = pd.to_datetime(plant_level_data['timestamp']).dt.round('s')
         plant_level_data = plant_level_data.sort_values(by='timestamp')
 
         current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
 
-        plant_base_name = f"{plant.replace(' ', '_')}_PlantLevel_{current_time}"
+        plant_base_name = f"{plant.replace(' ', '_')}_Plant_{current_time}"
         plant_csv_path = os.path.join(output_dir, f"{plant_base_name}.csv")
         plant_zip_path = os.path.join(output_dir, f"{plant_base_name}.zip")
 
@@ -466,33 +468,55 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
         with zipfile.ZipFile(plant_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(plant_csv_path, os.path.basename(plant_csv_path))
             os.remove(plant_csv_path)
-        sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+        SFTP=True
 
+        if SFTP:
+            sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+            time.sleep(1)
+            if sftp_success:
+                if plant_level_tag:
+                    last_upload_time = plant_level_data['timestamp'].max()
+                else:
+                    last_upload_time = log_data['timestamp'].max()
+                all_logged_tags = set()
 
+                if tags:
+                    all_logged_tags.update(tags)
 
-    if sftp_success:
-        if plant_level_tag:
-            last_upload_time = plant_level_data['timestamp'].max()
+                if operating_state_tag:
+                    all_logged_tags.add(operating_state_tag)
+
+                if plant_level_tag:
+                    all_logged_tags.add(plant_level_tag)
+                for tag in all_logged_tags:
+                    log_tag_details(plant,tag,last_upload_time,log_excel_path)
+                if os.path.exists(plant_zip_path):
+                    os.remove(plant_zip_path)
+                if os.path.exists(turbine_zip_path):
+                    os.remove(turbine_zip_path)
+
+            else:
+                print("Please Retry, Problem in SFTP connection")
+                return
         else:
-            last_upload_time = log_data['timestamp'].max()
-        all_logged_tags = set()
+            time.sleep(1)
+            sftp_success=True
+            if sftp_success:
+                if plant_level_tag:
+                    last_upload_time = plant_level_data['timestamp'].max()
+                else:
+                    last_upload_time = log_data['timestamp'].max()
+                all_logged_tags = set()
 
-        if tags:
-            all_logged_tags.update(tags)
+                if tags:
+                    all_logged_tags.update(tags)
 
-        if operating_state_tag:
-            all_logged_tags.add(operating_state_tag)
+                if operating_state_tag:
+                    all_logged_tags.add(operating_state_tag)
 
-        if plant_level_tag:
-            all_logged_tags.add(plant_level_tag)
-        for tag in all_logged_tags:
-            log_tag_details(plant,tag,last_upload_time,log_excel_path)
-        if os.path.exists(plant_zip_path):
-            os.remove(plant_zip_path)
-        if os.path.exists(turbine_zip_path):
-            os.remove(turbine_zip_path)
+                if plant_level_tag:
+                    all_logged_tags.add(plant_level_tag)
+                for tag in all_logged_tags:
+                    log_tag_details(plant,tag,last_upload_time,log_excel_path)
 
-    else:
-        print("Please Retry, Problem in SFTP connection")
-        return
 # =============================================================================

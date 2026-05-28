@@ -32,7 +32,7 @@ if SUPER:
         SSH_KEY_PATH=os.path.join(SSH_KEY_PATH,secrets.get('SFTP_PRIVATE_KEY'))
         channel_list_version_flag=int(secrets.get('CHANNEL_LIST_VERSION_FLAG_SUPER'))
 
-        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_SUPER.csv'))
+        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'))
     else:
         from Functions.start_super import start_super
         from Functions.start_super_tracker import start_tracker_super
@@ -59,8 +59,8 @@ if SUPER:
         SSH_KEY_PATH_trackers=SSH_KEY_PATH
         channel_list_version_flag_trackers=int(secrets.get('CHANNEL_LIST_VERSION_FLAG_SUPER'))
         
-        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_SUPER.csv'))
-        start_tracker_super(channel_list_path_trackers, log_dir_trackers, data_file_max_length_days_trackers, raw_data_interval_mins_trackers,output_dir_trackers,secret_path,channel_list_version_flag_trackers,log_sftp_path_trackers,SSH_KEY_PATH_trackers,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_SUPER.xlsx'))
+        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'))
+       # start_tracker_super(channel_list_path_trackers, log_dir_trackers, data_file_max_length_days_trackers, raw_data_interval_mins_trackers,output_dir_trackers,secret_path,channel_list_version_flag_trackers,log_sftp_path_trackers,SSH_KEY_PATH_trackers,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'))
 
         
 # LEAP Data Transfer:
@@ -91,5 +91,7 @@ if BEST:
     log_sftp_path=os.path.join(directory_path, r'Log_Files\BEST\SFTP_Logs.log')
     SSH_KEY_PATH=os.path.join(directory_path,'SSH_KEYS')
     SSH_KEY_PATH=os.path.join(SSH_KEY_PATH,secrets.get('SFTP_PRIVATE_KEY'))
+    channel_list_version_flag='0'
+
 
     start_best(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_BEST.csv'))
