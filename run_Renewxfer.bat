@@ -1,0 +1,1 @@
+"c:\Users\U67582\Desktop\LEAP, SUPER, BEST\Renewable-Data-Transfer-main\env-superxfer\Scripts\python.exe" "c:/Users/U67582/Desktop/LEAP, SUPER, BEST/Renewable-Data-Transfer-main/Main.py"
