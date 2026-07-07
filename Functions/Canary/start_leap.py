@@ -15,22 +15,14 @@ import pysftp
 import paramiko
 import time
 from dotenv import dotenv_values
-from Functions.channel_list_converter import convert_channel_list
-from birdsong import CanaryClient  
-
+from Functions.Canary.channel_list_converter import convert_channel_list
+from Functions.Canary.CanaryAPI import canary_api
 # =============================================================================
 # Logging:
 import logging
 # =============================================================================
-# # PIconnect:-
-import time
-try:
-    import PIconnect as PI
-    from PIconnect.PIConsts import CalculationBasis, SummaryType, TimestampCalculation
-except:
-    import PIconnect as PI
-    from PIconnect.PIConsts import CalculationBasis, SummaryType,TimestampCalculation
-PI.PIConfig.DEFAULT_TIMEZONE = 'UTC'
+# Canary API Setup:
+conn = canary_api()
 # =============================================================================
 # get_utc_time:-
 def get_utc_time(time_value):
@@ -59,7 +51,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
     USE_SSH_KEY = bool(int(secrets.get('USE_SSHKEY', 0)))
     SLEEP_TIME = int(secrets.get('SLEEP_TIME', 30))
     MAX_COUNT = int(secrets.get('MAX_COUNT', 3))
-    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER')
+    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER_LEAP')
     HOST = secrets.get('SFTP_HOST')
     USERNAME = secrets.get('SFTP_USERNAME')
 
@@ -172,7 +164,9 @@ def log_tag_details(plant_name, tag_name, upload_time, log_excel_path):
         log_df.to_csv(log_excel_path, index=False)
 # =============================================================================
 # catch_up_new_tags:-
-def catch_up_new_tags(plant_name,turbine, new_tags, existing_tags, plant_start_date,log_excel_path, data_file_max_length, interval, output_dir, server_name, secret_path,log_sftp_path, SSH_KEY_PATH, pbar, tag_mapping_path):
+def catch_up_new_tags(plant_name, turbine, new_tags, existing_tags, plant_start_date, log_excel_path,
+                       data_file_max_length, interval, output_dir, server_name, secret_path, log_sftp_path,
+                       SSH_KEY_PATH, pbar, tag_mapping_path, operating_state_tag=None, plant_level_tag=None,SFTP_en=True):
     log_df = pd.read_csv(log_excel_path) if os.path.exists(log_excel_path) else pd.DataFrame(columns=['Plant Name', 'Tag Name', 'Last Upload Time'])
 
     # Get common end time from existing tags
@@ -209,7 +203,11 @@ def catch_up_new_tags(plant_name,turbine, new_tags, existing_tags, plant_start_d
                 get_utc_time(start_time + timedelta(days=data_file_max_length)) - interval_delta,
                 end_time
             )
-            log_data_from_canary(tags=[tag], operating_state_tag=None, plant_level_tag=None, start_time=start_time, end_time=current_end_time, plant=plant_name, turbine=turbine, log_excel_path=log_excel_path, server_name=server_name, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path)
+            log_data_from_canary(tags=[tag], operating_state_tag=operating_state_tag, plant_level_tag=plant_level_tag,
+                             start_time=start_time, end_time=current_end_time, plant=plant_name, turbine=turbine,
+                             log_excel_path=log_excel_path, output_dir=output_dir,
+                             interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path,
+                             SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path, SFTP_en=SFTP_en)
 
             pbar.update((current_end_time - start_time).total_seconds() // 60 // interval)
 
@@ -221,7 +219,7 @@ def catch_up_new_tags(plant_name,turbine, new_tags, existing_tags, plant_start_d
 # =============================================================================
 # Start:-
 
-def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, output_dir, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path):
+def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, output_dir, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path,SFTP_en):
 
     raw = pd.read_excel(tag_list_path, sheet_name='Channel_Tags', engine='openpyxl', header=None)
     headers = raw.iloc[0].tolist()
@@ -281,7 +279,7 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
                     get_utc_time(current_start + timedelta(days=data_file_max_length)) - timedelta(minutes=interval),
                     end_date
                 )
-                log_data_from_canary(tags=[plant_level_tag], operating_state_tag=None, plant_level_tag=plant_level_tag, start_time=current_start, end_time=current_end, plant=plant, turbine="PlantLevel", log_excel_path=plant_log_file_path, server_name=server_name, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path)
+                log_data_from_canary(tags=[plant_level_tag], operating_state_tag=None, plant_level_tag=plant_level_tag, start_time=current_start, end_time=current_end, plant=plant, turbine="PlantLevel", log_excel_path=plant_log_file_path, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path,SFTP_en=SFTP_en)
 
                 pbar.update(1)
                 current_start = current_end + timedelta(minutes=interval)
@@ -317,7 +315,13 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
 
             # Catch up new tags
             if new_tags:
-                turbine_tags = catch_up_new_tags(plant_name=plant, turbine=turbine, new_tags=new_tags, existing_tags=existing_tags, plant_start_date=plant_start_date, log_excel_path=plant_log_file_path, data_file_max_length=data_file_max_length, interval=interval, output_dir=output_dir, server_name=server_name, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, pbar=pbar, tag_mapping_path=tag_mapping_path)
+                turbine_tags = catch_up_new_tags(plant_name=plant, turbine=turbine, new_tags=new_tags,
+                                                 existing_tags=existing_tags, plant_start_date=plant_start_date,
+                                                 log_excel_path=plant_log_file_path, data_file_max_length=data_file_max_length,
+                                                 interval=interval, output_dir=output_dir, server_name=server_name,
+                                                 secret_path=secret_path, log_sftp_path=log_sftp_path,
+                                                 SSH_KEY_PATH=SSH_KEY_PATH, pbar=pbar, tag_mapping_path=tag_mapping_path,
+                                                 operating_state_tag=operating_state_tag, plant_level_tag=plant_level_tag,SFTP_en=SFTP_en)
             
             current_start = _last_upload_for_tagset(
                 plant_log_file_path, plant, turbine_tags, plant_start_date
@@ -329,172 +333,214 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
                     get_utc_time(current_start + timedelta(days=data_file_max_length)) - timedelta(minutes=interval),
                     end_date
                 )
-                log_data_from_canary(tags=turbine_tags, operating_state_tag=operating_state_tag, plant_level_tag=None, start_time=current_start, end_time=current_end, plant=plant, turbine=turbine, log_excel_path=plant_log_file_path, server_name=server_name, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path)
+                log_data_from_canary(tags=turbine_tags, operating_state_tag=operating_state_tag, plant_level_tag=None, start_time=current_start, end_time=current_end, plant=plant, turbine=turbine, log_excel_path=plant_log_file_path, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path,SFTP_en=SFTP_en)
 
                 pbar.update(1)
                 current_start = current_end + timedelta(minutes=interval)
 
         pbar.close()
 # =============================================================================
-
-def log_data_from_canary(tags,operating_state_tag,plant_level_tag, start_time,end_time,plant,turbine,log_excel_path,server_name,output_dir,interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path):
-
+def log_data_from_canary(tags, operating_state_tag, plant_level_tag, start_time, end_time,
+                     plant, turbine, log_excel_path, output_dir,
+                     interval, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path,SFTP_en=True):
+    tag_mapping_df = pd.read_csv(tag_mapping_path)
+    tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time) + timedelta(minutes=interval))
+    turbine_zip_path=''
+    plant_zip_path=''
 
     tags = list(tags)
     op_tag = operating_state_tag
+
     normal_tags = [t for t in tags if t not in [op_tag, plant_level_tag]]
 
     results = []
     plant_level_results = []
 
-    time_index = pd.date_range(start=start_time, end=end_time, freq=f"{interval}min")
+    # Format start/end dates for Canary API (M/D/YYYY format)
+    start_str = start_time.strftime('%m/%d/%Y')
+    end_str = end_time.strftime('%m/%d/%Y')
 
-    client = CanaryClient(server_name)
-
-    all_points = {}
-    for tag in tags:
+    def fetch_tag_data(tag_list, stats):
+        """Fetch data for a list of tags with specified statistics."""
+        if not tag_list:
+            return None
+        tag_series = pd.Series(tag_list)
         try:
-            all_points[tag] = client.get_tag(tag)
-        except Exception:
-            continue
+            data = conn.get_aggregate_data(tag_series, start_str, end_str, f'{interval}m', stats)
+            return data
+        except Exception as e:
+            print(f"Error fetching data from Canary API: {e}")
+            time.sleep(1800)  # Wait for 30 minutes before retrying
+            return conn.get_aggregate_data(tag_series, start_str, end_str, f'{interval}m', stats)
 
- 
     for tag in normal_tags:
-        if tag not in all_points:
+        # Fetch all four statistics for normal tags
+        avg_data = fetch_tag_data([tag], 'TimeAverage2')
+        min_data = fetch_tag_data([tag], 'Minimum2')
+        max_data = fetch_tag_data([tag], 'Maximum2')
+        std_data = fetch_tag_data([tag], 'StandardDeviationSample')
+
+        if avg_data is None:
             continue
 
-        point = all_points[tag]
+        # Combine all statistics into one DataFrame
+        combined = avg_data.copy()
+        combined.index.name = 'timestamp'
+        combined = combined.reset_index()
 
-        df = client.query_aggregate(
-            tag=tag,
-            start=start_time,
-            end=end_time,
-            interval=f"{interval}m",
-            calculations=["avg", "min", "max", "std"]
-        )
+        # Rename columns for each statistic
+        tag_cols = list(avg_data.columns)
+        if tag_cols:
+            col = tag_cols[0]
+            combined.rename(columns={col: f'{tag}_Avg'}, inplace=True)
+            
+            if min_data is not None and len(min_data.columns) > 0:
+                min_col = list(min_data.columns)[0]
+                combined[f'{tag}_Min'] = min_data.iloc[:, 0].values
+            
+            if max_data is not None and len(max_data.columns) > 0:
+                max_col = list(max_data.columns)[0]
+                combined[f'{tag}_Max'] = max_data.iloc[:, 0].values
+            
+            if std_data is not None and len(std_data.columns) > 0:
+                std_col = list(std_data.columns)[0]
+                combined[f'{tag}_StD'] = std_data.iloc[:, 0].values
 
-        df = df.rename(columns={
-            "avg": f"{tag}_avg",
-            "min": f"{tag}_min",
-            "max": f"{tag}_max",
-            "std": f"{tag}_std"
-        })
+        results.append(combined.rename(columns=tag_mapping_dict))
 
-        results.append(df)
+    if op_tag:
+        op_data = fetch_tag_data([op_tag], 'TimeAverage2')
+        if op_data is not None:
+            op_df = op_data.copy()
+            op_df.index.name = 'timestamp'
+            op_df = op_df.reset_index()
+            tag_cols = list(op_data.columns)
+            if tag_cols:
+                op_df.rename(columns={tag_cols[0]: f'{op_tag}_Avg'}, inplace=True)
+            results.append(op_df.rename(columns=tag_mapping_dict))
 
+    if turbine == "PlantLevel" and plant_level_tag:
+        # Fetch all four statistics for plant level tag
+        avg_data = fetch_tag_data([plant_level_tag], 'TimeAverage2')
+        min_data = fetch_tag_data([plant_level_tag], 'Minimum2')
+        max_data = fetch_tag_data([plant_level_tag], 'Maximum2')
+        std_data = fetch_tag_data([plant_level_tag], 'StandardDeviationSample')
 
-    if op_tag and op_tag in all_points:
+        if avg_data is not None:
+            combined = avg_data.copy()
+            combined.index.name = 'timestamp'
+            combined = combined.reset_index()
 
-        df = client.query_aggregate(
-            tag=op_tag,
-            start=start_time,
-            end=end_time,
-            interval=f"{interval}m",
-            calculations=["avg"]
-        )
+            tag_cols = list(avg_data.columns)
+            if tag_cols:
+                col = tag_cols[0]
+                combined.rename(columns={col: f'{plant_level_tag}_Avg'}, inplace=True)
+                
+                if min_data is not None and len(min_data.columns) > 0:
+                    combined[f'{plant_level_tag}_Min'] = min_data.iloc[:, 0].values
+                
+                if max_data is not None and len(max_data.columns) > 0:
+                    combined[f'{plant_level_tag}_Max'] = max_data.iloc[:, 0].values
+                
+                if std_data is not None and len(std_data.columns) > 0:
+                    combined[f'{plant_level_tag}_StD'] = std_data.iloc[:, 0].values
 
-        df = df.rename(columns={"avg": f"{op_tag}_avg"})
-        results.append(df)
-
-    if turbine == "PlantLevel" and plant_level_tag and plant_level_tag in all_points:
-
-        df = client.query_aggregate(
-            tag=plant_level_tag,
-            start=start_time,
-            end=end_time,
-            interval=f"{interval}m",
-            calculations=["avg", "min", "max", "std"]
-        )
-
-        df = df.rename(columns={
-            "avg": f"{plant_level_tag}_avg",
-            "min": f"{plant_level_tag}_min",
-            "max": f"{plant_level_tag}_max",
-            "std": f"{plant_level_tag}_std"
-        })
-
-        plant_level_results.append(df)
-
-
-    sftp_success = False
+            plant_level_results.append(combined.rename(columns=tag_mapping_dict))
 
     if results:
         log_data = results[0]
         for df in results[1:]:
-            log_data = pd.merge(log_data, df, on="timestamp", how="outer")
+            log_data = pd.merge(log_data, df, on='timestamp', how='outer')
 
-        log_data["timestamp"] = pd.to_datetime(log_data["timestamp"]).dt.round("s")
-        log_data = log_data.sort_values("timestamp")
+        log_data['timestamp'] = pd.to_datetime(log_data['timestamp']).dt.round('s')
+        log_data = log_data.sort_values(by='timestamp')
 
         current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
 
         turbine_base_name = f"{plant.replace(' ', '_')}_{turbine}_{current_time}"
-        csv_path = os.path.join(output_dir, f"{turbine_base_name}.csv")
-        zip_path = os.path.join(output_dir, f"{turbine_base_name}.zip")
+        turbine_csv_path = os.path.join(output_dir, f"{turbine_base_name}.csv")
+        turbine_zip_path = os.path.join(output_dir, f"{turbine_base_name}.zip")
 
-        log_data.to_csv(csv_path, index=False)
+        log_data.to_csv(turbine_csv_path, index=False)
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(csv_path, os.path.basename(csv_path))
-            os.remove(csv_path)
+        with zipfile.ZipFile(turbine_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(turbine_csv_path, os.path.basename(turbine_csv_path))
+            os.remove(turbine_csv_path)
+        if SFTP_en:
+            sftp_success = upload_via_sftp(turbine_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+        else:
+            sftp_success=True
 
-        sftp_success = upload_via_sftp(zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
 
 
-    plant_zip_path = None
 
     if plant_level_results:
         plant_level_data = plant_level_results[0]
-
-        plant_level_data["timestamp"] = pd.to_datetime(plant_level_data["timestamp"]).dt.round("s")
-        plant_level_data = plant_level_data.sort_values("timestamp")
+        plant_level_data= plant_level_data.rename(columns={"index": "timestamp"})
+        plant_level_data['timestamp'] = pd.to_datetime(plant_level_data['timestamp']).dt.round('s')
+        plant_level_data = plant_level_data.sort_values(by='timestamp')
 
         current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
 
-        plant_base_name = f"{plant.replace(' ', '_')}_PlantLevel_{current_time}"
+        plant_base_name = f"{plant.replace(' ', '_')}_Plant_{current_time}"
         plant_csv_path = os.path.join(output_dir, f"{plant_base_name}.csv")
         plant_zip_path = os.path.join(output_dir, f"{plant_base_name}.zip")
 
         plant_level_data.to_csv(plant_csv_path, index=False)
 
-        with zipfile.ZipFile(plant_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(plant_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(plant_csv_path, os.path.basename(plant_csv_path))
             os.remove(plant_csv_path)
 
-        sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+        if SFTP_en:
+            sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+            time.sleep(1)
+            if sftp_success:
+                if plant_level_tag:
+                    last_upload_time = plant_level_data['timestamp'].max()
+                else:
+                    last_upload_time = log_data['timestamp'].max()
+                all_logged_tags = set()
 
+                if tags:
+                    all_logged_tags.update(tags)
 
-    if sftp_success:
+                if operating_state_tag:
+                    all_logged_tags.add(operating_state_tag)
 
-        last_upload_time = (
-            plant_level_data["timestamp"].max()
-            if plant_level_tag and plant_level_results
-            else log_data["timestamp"].max()
-        )
+                if plant_level_tag:
+                    all_logged_tags.add(plant_level_tag)
+                for tag in all_logged_tags:
+                    log_tag_details(plant,tag,last_upload_time,log_excel_path)
+                if os.path.exists(plant_zip_path):
+                    os.remove(plant_zip_path)
+                if os.path.exists(turbine_zip_path):
+                    os.remove(turbine_zip_path)
 
-        all_logged_tags = set(tags)
+            else:
+                print("Please Retry, Problem in SFTP connection")
+                return
+        else:
+            time.sleep(1)
+            sftp_success=True
+            if sftp_success:
+                if plant_level_tag:
+                    last_upload_time = plant_level_data['timestamp'].max()
+                else:
+                    last_upload_time = log_data['timestamp'].max()
+                all_logged_tags = set()
 
-        if operating_state_tag:
-            all_logged_tags.add(operating_state_tag)
-        if plant_level_tag:
-            all_logged_tags.add(plant_level_tag)
+                if tags:
+                    all_logged_tags.update(tags)
 
-        for tag in all_logged_tags:
-            log_tag_details(
-                plant,
-                tag,
-                last_upload_time,
-                log_excel_path
-            )
+                if operating_state_tag:
+                    all_logged_tags.add(operating_state_tag)
 
-        if plant_zip_path and os.path.exists(plant_zip_path):
-            os.remove(plant_zip_path)
+                if plant_level_tag:
+                    all_logged_tags.add(plant_level_tag)
+                for tag in all_logged_tags:
+                    log_tag_details(plant,tag,last_upload_time,log_excel_path)
 
-        if 'zip_path' in locals() and os.path.exists(zip_path):
-            os.remove(zip_path)
-
-    else:
-        print("Please retry — SFTP connection failed")
-        return
+# =============================================================================

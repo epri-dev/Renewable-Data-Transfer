@@ -9,18 +9,25 @@
 # Global Dependancies:
 
 import os
+import sys
+import importlib
 from dotenv import dotenv_values
 directory_path = os.path.dirname(__file__)
+sys.path.insert(0, directory_path)
 secret_path = os.path.join(directory_path, 'constants.env')
 secrets = dotenv_values(secret_path)
+DATA_HISTORIAN = secrets.get('DATA_HISTORIAN', 'PI')  # 'PI' or 'Canary'
 SUPER=int(secrets.get('SUPER'))
 LEAP=int(secrets.get('LEAP'))
 BEST=int(secrets.get('BEST'))
+SFTP_en = int(secrets.get('SFTP_ENABLED'))
+# Determine the module path based on DATA_HISTORIAN selection
+HISTORIAN_MODULE_PATH = f'Functions.{DATA_HISTORIAN}'
 # SUPER Data Transfer:
 if SUPER:
     performance_only=int(secrets.get('PERFORMANCE_ONLY'))
     if performance_only:
-        from Functions.start_super import start_super
+        start_super = importlib.import_module(f'{HISTORIAN_MODULE_PATH}.start_super').start_super
         channel_list_filename = secrets.get('CHANNEL_LIST_SUPER')
         data_file_max_length_days=int(secrets.get('DATA_FILE_MAX_LENGTH_SUPER'))
         raw_data_interval_mins=int(secrets.get('RAW_DATA_INTERVAL_SUPER'))
@@ -32,10 +39,10 @@ if SUPER:
         SSH_KEY_PATH=os.path.join(SSH_KEY_PATH,secrets.get('SFTP_PRIVATE_KEY'))
         channel_list_version_flag=int(secrets.get('CHANNEL_LIST_VERSION_FLAG_SUPER'))
 
-        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'))
+        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'),SFTP_en)
     else:
-        from Functions.start_super import start_super
-        from Functions.start_super_tracker import start_tracker_super
+        start_super = importlib.import_module(f'{HISTORIAN_MODULE_PATH}.start_super').start_super
+        start_tracker_super = importlib.import_module(f'{HISTORIAN_MODULE_PATH}.start_super_tracker').start_tracker_super
 
         #Performance Inputs:
         channel_list_filename = secrets.get('CHANNEL_LIST_SUPER')
@@ -59,13 +66,13 @@ if SUPER:
         SSH_KEY_PATH_trackers=SSH_KEY_PATH
         channel_list_version_flag_trackers=int(secrets.get('CHANNEL_LIST_VERSION_FLAG_SUPER'))
         
-        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'))
-       # start_tracker_super(channel_list_path_trackers, log_dir_trackers, data_file_max_length_days_trackers, raw_data_interval_mins_trackers,output_dir_trackers,secret_path,channel_list_version_flag_trackers,log_sftp_path_trackers,SSH_KEY_PATH_trackers,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'))
+        start_super(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'), SFTP_en)
+        start_tracker_super(channel_list_path_trackers, log_dir_trackers, data_file_max_length_days_trackers, raw_data_interval_mins_trackers,output_dir_trackers,secret_path,channel_list_version_flag_trackers,log_sftp_path_trackers,SSH_KEY_PATH_trackers,os.path.join(directory_path, 'Channel_List', 'tag_mapping_list.csv'), SFTP_en)
 
         
 # LEAP Data Transfer:
 if LEAP:
-    from Functions.start_leap import start_leap
+    start_leap = importlib.import_module(f'{HISTORIAN_MODULE_PATH}.start_leap').start_leap
     channel_list_filename = secrets.get('CHANNEL_LIST_LEAP')
     data_file_max_length_days=int(secrets.get('DATA_FILE_MAX_LENGTH_LEAP'))
     raw_data_interval_mins=int(secrets.get('RAW_DATA_INTERVAL_LEAP'))
@@ -76,12 +83,12 @@ if LEAP:
     SSH_KEY_PATH=os.path.join(directory_path,'SSH_KEYS')
     SSH_KEY_PATH=os.path.join(SSH_KEY_PATH,secrets.get('SFTP_PRIVATE_KEY'))
 
-    start_leap(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path,  log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_LEAP.csv'))
+    start_leap(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path,  log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_LEAP.csv'), SFTP_en)
     
 
 # BEST Data Transfer:
 if BEST:
-    from Functions.start_best import start_best
+    start_best = importlib.import_module(f'{HISTORIAN_MODULE_PATH}.start_best').start_best
     channel_list_filename = secrets.get('CHANNEL_LIST_BEST')
     data_file_max_length_days=int(secrets.get('DATA_FILE_MAX_LENGTH_BEST'))
     raw_data_interval_mins=int(secrets.get('RAW_DATA_INTERVAL_BEST'))
@@ -94,4 +101,8 @@ if BEST:
     channel_list_version_flag='0'
 
 
-    start_best(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_BEST.csv'))
+    start_best(channel_list_path, log_dir, data_file_max_length_days, raw_data_interval_mins,output_dir, secret_path, channel_list_version_flag, log_sftp_path, SSH_KEY_PATH,os.path.join(directory_path, 'Channel_List', 'Tag_mapping_list_BEST.csv'), SFTP_en)
+
+from Functions.upload_log_files import zip_and_upload_folder
+
+zip_and_upload_folder(os.path.join(directory_path,'Log_Files'), os.path.join(directory_path, 'constants.env'), log_dir, SSH_KEY_PATH,SFTP_en)

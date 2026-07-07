@@ -84,7 +84,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
         logger.error('Max retry attempts reached. Upload failed.')
 
     return success
-def zip_and_upload_folder(folder_path, secrets_path, log_dir, SSH_KEY_PATH):
+def zip_and_upload_folder(folder_path, secrets_path, log_dir, SSH_KEY_PATH,SFTP_en):
     folder_path = os.path.abspath(folder_path)
     parent_dir, folder_name = os.path.split(folder_path)
     zip_file_path = os.path.join(parent_dir, f"{folder_name}.zip")
@@ -98,12 +98,17 @@ def zip_and_upload_folder(folder_path, secrets_path, log_dir, SSH_KEY_PATH):
                     zipf.write(abs_file_path, arcname)
     except Exception as e:
         raise RuntimeError(f"Error zipping folder '{folder_path}': {e}")
-    success = upload_via_sftp(zip_file_path, secrets_path, log_dir, SSH_KEY_PATH)
-    if success:
-        try:
-            os.remove(zip_file_path)
+    
+    if SFTP_en:
+        success = upload_via_sftp(zip_file_path, secrets_path, log_dir, SSH_KEY_PATH)
+        if success:
             logging.info(f"Temporary zip file deleted: {zip_file_path}")
-        except Exception as e:
-            logging.warning(f"Could not delete zip file: {zip_file_path}. Error: {e}")
+            os.remove(zip_file_path)
+        else:
+            print("Not deleting the file as SFTP upload failed. Please check the logs for details.")
+    else:
+        logging.info("SFTP upload is disabled. Skipping upload step.")
+        success = True  # Consider it a success if SFTP is disabled
+
 
     return success

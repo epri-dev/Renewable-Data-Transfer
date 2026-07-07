@@ -15,7 +15,7 @@ import paramiko
 import time
 from dotenv import dotenv_values
 # from Functions.pi_utils import PIPointList
-from Functions.channel_list_converter import convert_channel_list
+from Functions.PI.channel_list_converter import convert_channel_list
 # =============================================================================
 # Logging:
 import logging
@@ -171,7 +171,7 @@ def log_tag_details(plant_name, tag_name, upload_time, log_excel_path):
         log_df.to_csv(log_excel_path, index=False)
 # =============================================================================
 # catch_up_new_tags:-
-def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, last_upload_time, log_excel_path, data_file_max_length, interval, output_dir, server_name,secret_path,log_sftp_path,SSH_KEY_PATH,pbar,tag_mapping_path):
+def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, last_upload_time, log_excel_path, data_file_max_length, interval, output_dir, server_name,secret_path,log_sftp_path,SSH_KEY_PATH,pbar,tag_mapping_path,SFTP_en):
     log_df = pd.read_csv(log_excel_path) if os.path.exists(log_excel_path) else pd.DataFrame(columns=['Plant Name', 'Tag Name', 'Last Upload Time'])
 
     if existing_tags:
@@ -208,7 +208,7 @@ def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, las
             f"Pulling data for '{plant_name}', between {pd.to_datetime(start_time).date()}, and {pd.to_datetime(end_time).date()}")
 
         # Process the new tags for the catch-up period
-        log_data_from_pi(pd.DataFrame(new_tags).transpose(), start_time, current_end_time, plant_name, log_excel_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path)
+        log_data_from_pi(pd.DataFrame(new_tags).transpose(), start_time, current_end_time, plant_name, log_excel_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en)
         pbar.update(len(new_tags) * (current_end_time - start_time).total_seconds() // 60 // interval)
 
         # Move the start time forward by one interval
@@ -218,7 +218,7 @@ def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, las
     return existing_tags + new_tags
 # =============================================================================
 # Start:-
-def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, interval, output_dir,secret_path,channel_list_version_flag,log_sftp_path,SSH_KEY_PATH,tag_mapping_path):
+def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, interval, output_dir,secret_path,channel_list_version_flag,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en):
     df = pd.read_excel(tag_list_path, sheet_name='Tracker_Tags')
 
     df['PlantName'] = df['PlantName'].ffill()  # Forward fill plant names and start dates
@@ -282,7 +282,7 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
         pbar = tqdm(total=total_steps, desc=f"{plant}", unit="pts")
         # Catch up for new tags
         if new_tags:
-            tags = catch_up_new_tags(plant, new_tags, existing_tags, plant_start_date, last_upload_time, plant_log_file_path, data_file_max_length, interval, output_dir, server_name,secret_path,log_sftp_path,SSH_KEY_PATH,pbar,tag_mapping_path)
+            tags = catch_up_new_tags(plant, new_tags, existing_tags, plant_start_date, last_upload_time, plant_log_file_path, data_file_max_length, interval, output_dir, server_name,secret_path,log_sftp_path,SSH_KEY_PATH,pbar,tag_mapping_path,SFTP_en)
         tag_chunks = [tags[i:i + 1000] for i in range(0, len(tags), 1000)]
     
         for i, chunk in enumerate(tag_chunks):
@@ -291,7 +291,7 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
                 interval_delta = timedelta(minutes=interval)    
                 current_end_date = min(get_utc_time(current_start_date + timedelta(days=data_file_max_length)) - interval_delta, end_date)
                
-                log_data_from_pi(pd.DataFrame(chunk).transpose(), current_start_date, current_end_date, plant, plant_log_file_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path)
+                log_data_from_pi(pd.DataFrame(chunk).transpose(), current_start_date, current_end_date, plant, plant_log_file_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en)
                 pbar.set_postfix({
                     "Chunk": i + 1,
                     "Tags": len(chunk),
@@ -302,7 +302,7 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
                 current_start_date = current_end_date + interval_delta
 # =============================================================================
 # log_data_from_pi:- 
-def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path):
+def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, server_name, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en):
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time)+timedelta(minutes=interval))
     tags = tags_df.values.flatten().tolist()
@@ -345,12 +345,16 @@ def log_data_from_pi(tags_df, start_time, end_time, plant, log_excel_path, serve
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         zipf.write(output_csv_path, os.path.basename(output_csv_path))
         os.remove(output_csv_path)
-    sftp_success=upload_via_sftp(zip_file_path,secret_path,log_sftp_path,SSH_KEY_PATH)
+    if SFTP_en:
+        sftp_success=upload_via_sftp(zip_file_path,secret_path,log_sftp_path,SSH_KEY_PATH)
+        if sftp_success:
+            logging.info(f"Temporary zip file deleted: {zip_file_path}")
+            os.remove(zip_file_path)
+    else:
+        sftp_success=True
     print(f"Data Transferred for '{plant}', {pd.to_datetime(start_time).date()}, Log files updated.")
     time.sleep(1)
-    #sftp_success=True
     if sftp_success==True:
-        os.remove(zip_file_path)
         for tag in tags:
             last_upload_time = log_data['timestamp'].max()
             log_tag_details(plant, tag, last_upload_time, log_excel_path)
