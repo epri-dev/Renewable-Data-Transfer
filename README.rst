@@ -1,18 +1,15 @@
 Renewable Data Transfer (RENEWXfer)
 ==================================
 
-Renewable Data Transfer (RENEWXfer) is an EPRI-developed Python application that
-enables secure, standardized extraction, staging, and transfer of renewable
-energy system data to external systems via SFTP.
+RENEWXfer is an EPRI-developed Python application that enables secure,
+standardized extraction, staging, and transfer of renewable energy system
+data to EPRI via SFTP.
 
 The application supports three EPRI renewable benchmarking platforms:
 
-* **SUPER** – Solar Performance and Reliability Benchmarking
-* **LEAP** – Wind Performance Benchmarking
-* **BEST** – BESS Benchmarking
-
-RENEWXfer provides configuration-driven execution and auditable delivery of
-performance and tracker data across all supported platforms.
+* **SUPER®** – Solar Performance and Reliability Benchmarking
+* **LEAP®** – Wind Performance Benchmarking
+* **BEST®** – BESS Benchmarking
 
 ---
 
@@ -24,13 +21,10 @@ renewable operational data. It is designed to support EPRI data collection,
 integration, and governance objectives through:
 
 * Secure, auditable delivery of time-series data
-* Configurable support for multiple renewable platforms (SUPER, LEAP, BEST)
+* Configurable support for multiple renewable platforms (SUPER®, LEAP®, BEST®)
 * Standardized workflows for data extraction and transfer
-* Support for multiple data historian sources (PI, Canary)
+* Support for multiple data historian sources (OSIsoft PI, Canary)
 * Alignment with EPRI cybersecurity and data governance practices
-
-This repository contains the core application, configuration templates, and
-supporting artifacts required to deploy and operate RENEWXfer.
 
 ---
 
@@ -38,13 +32,14 @@ Key Capabilities
 ----------------
 
 * Secure SFTP transfer using SSH key- or password-based authentication
-* Configurable execution across SUPER, LEAP, and BEST platforms
-* Support for multiple data historian sources (PI Historian, Canary)
+* Configurable execution across SUPER®, LEAP®, and BEST® platforms
+* Support for OSIsoft PI Historian and Canary data sources
 * Channel list–driven data extraction and tag mapping
+* Automatic catch-up for new tags added to an existing plant
 * Time- and size-based partitioning of output data files
-* Automated generation, compression, and transfer of execution logs
-* Validation scripts for verifying PI tag connectivity
-* Modular Python architecture for extensibility and maintainability
+* Checkpoint-based resumption — re-runs safely pick up where they left off
+* Automated compression and SFTP transfer of execution logs
+* Validation scripts for verifying PI and Canary tag connectivity
 
 ---
 
@@ -55,145 +50,217 @@ Repository Structure
 
     RENEWXfer/
     ├── Main.py                         Primary execution entry point
-    ├── validate_LEAP.py               LEAP PI tag validation script
-    ├── validate_SUPER.py              SUPER PI tag validation script
-    ├── requirements.txt               Python dependency definitions
-    ├── Pipfile                        Pipenv dependency management
-    ├── constants.env                  Environment configuration file
-    ├── Channel_List/                  Channel lists and tag mappings
+    ├── validate_LEAP.py                LEAP PI tag validation script
+    ├── validate_SUPER.py               SUPER PI tag validation script
+    ├── requirements.txt                Python dependency definitions
+    ├── pyproject.toml                  PEP 517 build and dependency manifest
+    ├── constants.env                   Environment configuration (NOT for source control)
+    ├── Channel_List/                   Channel lists and tag mapping files
     │   ├── Tag_mapping_list_SUPER.csv
     │   ├── Tag_mapping_list_LEAP.csv
     │   └── Tag_mapping_list_BEST.csv
-    ├── Functions/                     Core functional modules
-    │   ├── PI/                        PI Historian data source modules
-    │   ├── Canary/                    Canary data source modules
-    │   ├── Archive/                   Archived/legacy modules
-    │   └── Test/                      Test validation scripts
-    ├── Log_Files/                     Execution and transfer logs
-    │   ├── SUPER/                     SUPER platform logs
-    │   │   └── Trackers/              SUPER tracker-specific logs
-    │   ├── LEAP/                      LEAP platform logs
-    │   └── BEST/                      BEST platform logs
-    ├── File_Staging/                  Staged output data files
-    │   ├── SUPER/                     SUPER staged data
-    │   │   └── Trackers/              SUPER tracker staged data
-    │   ├── LEAP/                      LEAP staged data
-    │   └── BEST/                      BEST staged data
-    └── SSH_KEYS/                      SSH private keys for authentication
+    ├── Functions/                      Core functional modules
+    │   ├── upload_log_files.py         Log archive and SFTP upload utility
+    │   ├── PI/                         OSIsoft PI Historian modules
+    │   ├── Canary/                     Canary Historian modules
+    │   ├── Archive/                    Legacy modules (not used in production)
+    │   └── Test/                       Development test scripts (not for production use)
+    ├── Log_Files/                      Execution and transfer logs (runtime-generated)
+    │   ├── SUPER/
+    │   │   └── Trackers/
+    │   ├── LEAP/
+    │   └── BEST/
+    ├── File_Staging/                   Staged output data files (runtime-generated)
+    │   ├── SUPER/
+    │   │   └── Trackers/
+    │   ├── LEAP/
+    │   └── BEST/
+    └── SSH_KEYS/                       SSH private key storage (NOT for source control)
+
+.. note::
+
+   ``constants.env`` and the ``SSH_KEYS/`` directory contain sensitive
+   credentials. Add both to ``.gitignore`` before committing to any repository.
 
 ---
 
 System Requirements
 -------------------
 
-* Python 3.8 or later
-* Windows or Linux operating system with SFTP capability
+* Python **3.11** or later
 * Network access to the configured data historian (PI Server or Canary API)
-* Network access to the configured SFTP endpoint (if SFTP is enabled)
-* Authorized SSH private key or SFTP credentials for authentication
+* Network access to the EPRI SFTP endpoint (if SFTP transfer is enabled)
+* SFTP credentials or SSH private key provided by EPRI
 
-Install dependencies using::
+Install dependencies::
 
     pip install -r requirements.txt
-
-Alternatively, Pipenv can be used for dependency management::
-
-    pipenv install
 
 ---
 
 Configuration
 -------------
 
-Application behavior is controlled via the ``constants.env`` file. This file
-defines execution parameters, platform selection, data historian source, and
-transfer settings.
+All behavior is controlled by the ``constants.env`` file in the project root.
+Copy and fill in this file before running the tool. Do not commit it to
+source control.
 
-Data Historian Source
-~~~~~~~~~~~~~~~~~~~~~
+Data Historian
+~~~~~~~~~~~~~~
 
-* ``DATA_HISTORIAN`` – Set to ``PI`` for PI Historian or ``Canary`` for Canary.
-  Determines which module set under ``Functions/`` is loaded at runtime.
+``DATA_HISTORIAN``
+    Set to ``PI`` for OSIsoft PI Historian or ``Canary`` for Canary Historian.
+    This determines which module set under ``Functions/`` is loaded at runtime.
+
+    For Canary: also set the API server hostname and API token directly in
+    ``Functions/Canary/CanaryAPI.py`` (``self.server`` and ``self.apiToken``).
 
 Platform Toggles
 ~~~~~~~~~~~~~~~~
 
-* ``SUPER`` – Enable SUPER data processing (1 or 0)
-* ``LEAP`` – Enable LEAP data processing (1 or 0)
-* ``BEST`` – Enable BEST data processing (1 or 0)
+``SUPER``, ``LEAP``, ``BEST``
+    Set to ``1`` to enable, ``0`` to disable. Multiple platforms can run in
+    a single execution.
 
-Multiple platforms can be enabled simultaneously.
+SFTP Settings
+~~~~~~~~~~~~~
 
+``SFTP_ENABLED``
+    Set to ``1`` to transfer files over SFTP, ``0`` to stage files locally
+    without uploading. When disabled, checkpoints are not advanced and staged
+    archives are retained.
+
+``USE_PASSWORD`` / ``USE_SSHKEY``
+    Set exactly one to ``1`` to select the authentication method.
+
+``SFTP_HOST``, ``SFTP_USERNAME``, ``SFTP_PASSWORD``
+    EPRI-provided SFTP connection details.
+
+``SFTP_PRIVATE_KEY``
+    Filename of the SSH private key placed in the ``SSH_KEYS/`` directory.
+
+``SFTP_PRIVATE_KEY_PASS``
+    Passphrase for the SSH private key, if applicable.
+
+``SLEEP_TIME``, ``MAX_COUNT``
+    Retry wait time (seconds) and maximum retry attempts for failed uploads.
 
 Platform-Specific Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each platform has its own set of parameters:
+For each platform (``SUPER``, ``LEAP``, ``BEST``):
 
-* ``CHANNEL_LIST_SUPER`` / ``CHANNEL_LIST_LEAP`` / ``CHANNEL_LIST_BEST`` – Channel list filename for data extraction
-* ``DATA_FILE_MAX_LENGTH_SUPER`` / ``DATA_FILE_MAX_LENGTH_LEAP`` / ``DATA_FILE_MAX_LENGTH_BEST`` – Maximum number of days per output file
-* ``RAW_DATA_INTERVAL_SUPER`` / ``RAW_DATA_INTERVAL_LEAP`` / ``RAW_DATA_INTERVAL_BEST`` – Data extraction interval (in minutes)
-* ``REMOTE_UPLOAD_FOLDER_SUPER`` / ``REMOTE_UPLOAD_FOLDER_LEAP`` / ``REMOTE_UPLOAD_FOLDER_BEST`` – Remote SFTP upload directory
-* ``CHANNEL_LIST_VERSION_FLAG_SUPER`` – Channel list version flag for SUPER (0 for old version)
-* ``PERFORMANCE_ONLY`` – Process only performance data, excluding tracker data (1 or 0; SUPER only)
+``CHANNEL_LIST_<PLATFORM>``
+    Filename of the Excel channel list in ``Channel_List/``.
 
-Tracker-specific parameters (SUPER only):
+``DATA_FILE_MAX_LENGTH_<PLATFORM>``
+    Maximum span of one output file in days.
 
-* ``DATA_FILE_MAX_LENGTH_TRACKERS`` – Maximum days per tracker output file
-* ``RAW_DATA_INTERVAL_TRACKERS`` – Tracker data extraction interval (in minutes)
-* ``REMOTE_UPLOAD_FOLDER_TRACKERS`` – Remote SFTP directory for tracker files
+``RAW_DATA_INTERVAL_<PLATFORM>``
+    Data extraction interval in minutes.
 
-All referenced files (channel lists, SSH keys) must be present in their
-respective directories prior to execution.
+``REMOTE_UPLOAD_FOLDER_<PLATFORM>``
+    Remote SFTP directory provided by EPRI.
+
+SUPER®-only parameters:
+
+``PERFORMANCE_ONLY``
+    Set to ``1`` to run performance data only (no tracker data).
+
+``CHANNEL_LIST_VERSION_FLAG_SUPER``
+    Set to ``0`` for the current channel list format.
+
+``DATA_FILE_MAX_LENGTH_TRACKERS``, ``RAW_DATA_INTERVAL_TRACKERS``
+    File length and interval settings for SUPER tracker data.
+
+``REMOTE_UPLOAD_FOLDER_TRACKERS``
+    Remote SFTP directory for SUPER tracker files.
 
 ---
 
 Execution
 ---------
 
-Run the application using::
+Run the application from the project root::
 
     python Main.py
 
-Execution behavior is determined by the configuration in ``constants.env``:
-
-* **Platform selection** – Which platforms (SUPER, LEAP, BEST) are enabled
-* **Data historian** – PI Historian or Canary data source
-* **Workflow mode** – Performance-only or combined performance + tracker (SUPER)
-* **SFTP transfer** – Enabled or disabled per execution
-
 For each enabled platform, RENEWXfer will:
 
-1. Load the appropriate channel list from ``Channel_List/``
-2. Extract time-series data from the configured data historian
-3. Stage output files in ``File_Staging/<platform>/``
-4. Transfer files to the remote SFTP endpoint (if SFTP is enabled)
-5. Compress and upload execution logs
+1. Load the channel list from ``Channel_List/``
+2. Read the last checkpoint from ``Log_Files/<platform>/<plant>_log.csv``
+3. Extract time-series data from the configured data historian
+4. Stage compressed output files in ``File_Staging/<platform>/``
+5. Transfer files to the EPRI SFTP endpoint (if ``SFTP_ENABLED=1``)
+6. Update the checkpoint log only on confirmed successful upload
+7. Compress and transfer all execution logs at the end of the run
+
+Checkpoint behavior
+~~~~~~~~~~~~~~~~~~~
+
+RENEWXfer tracks the last successfully uploaded timestamp per tag in a per-plant
+CSV log. On re-run it resumes from where the previous run succeeded. If a
+transfer fails, the checkpoint is not advanced so data is re-attempted on the
+next run. New tags added to a channel list are automatically caught up from
+the plant's commissioning date before regular processing continues.
+
+---
+
+Tag Validation
+--------------
+
+Before running production transfers, validate that all tags in a channel list
+are accessible:
+
+For PI::
+
+    python validate_LEAP.py
+    python validate_SUPER.py
+
+These scripts attempt to read each tag from the PI server and report any tags
+that are unreachable or return no data.
 
 ---
 
 Logging and Audit
 -----------------
 
-RENEWXfer generates logs to support traceability and operational auditing.
-Logs are organized by platform:
+Logs are organized by platform under ``Log_Files/``:
 
-* ``Log_Files/SUPER/`` – SUPER performance data logs
-* ``Log_Files/SUPER/Trackers/`` – SUPER tracker-specific logs
-* ``Log_Files/LEAP/`` – LEAP data logs
-* ``Log_Files/BEST/`` – BEST data logs
+* ``Log_Files/SUPER/SFTP_Logs.log`` – SUPER® SFTP transfer audit trail
+* ``Log_Files/SUPER/Trackers/SFTP_Logs.log`` – SUPER® Tracker SFTP audit trail
+* ``Log_Files/LEAP/SFTP_Logs.log`` – LEAP® SFTP transfer audit trail
+* ``Log_Files/BEST/SFTP_Logs.log`` – BEST® SFTP transfer audit trail
+* ``Log_Files/<platform>/<plant>_log.csv`` – Per-plant upload checkpoint log
 
-Each platform directory also contains an ``SFTP_Logs.log`` file for SFTP
-transfer audit trails.
+At the end of each run, the entire ``Log_Files/`` directory is compressed and
+transferred to the SFTP endpoint via ``Functions/upload_log_files.py``.
 
-At the end of execution, log files are compressed and transferred to the
-configured SFTP destination.
+---
+
+Security Considerations
+-----------------------
+
+* ``constants.env`` contains SFTP credentials and must not be committed to
+  source control. Add it to ``.gitignore``.
+* ``SSH_KEYS/`` contains private key material and must not be committed to
+  source control. Add it to ``.gitignore``.
+* SFTP host key verification is currently disabled (``cnopts.hostkeys = None``).
+  For production environments, configure known-host verification by populating
+  ``cnopts.hostkeys`` with the EPRI server's host key.
+* The Canary API communicates over HTTPS with certificate verification disabled
+  for self-signed certificates. Verify the server certificate independently if
+  operating in a strict security environment.
 
 ---
 
 Disclaimer
 ----------
 
+Copyright © Electric Power Research Institute, Inc. (EPRI). All rights reserved.
+
 This software is provided for authorized use under applicable EPRI agreements.
 Use, modification, and distribution are subject to EPRI policies and
-contractual terms.
+contractual terms. EPRI makes no warranties, express or implied, regarding
+fitness for a particular purpose or the accuracy of results produced by this
+software.

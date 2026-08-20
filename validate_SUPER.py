@@ -76,4 +76,4 @@ def validate_pi_tags_super(tag_list_path, channel_list_version_flag=0):
 
     return all_results
 
-validate_pi_tags_super(r'Channel_List\BEST_channel_list_DTE.xlsx')
+validate_pi_tags_super(r'Channel_List\BEST_channel_list.xlsx')

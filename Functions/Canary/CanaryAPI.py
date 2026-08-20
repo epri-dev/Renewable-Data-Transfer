@@ -40,7 +40,6 @@ class canary_api():
             mydict["Timestamp"].extend(timestamp)
         
         mydict["Timestamp"] = mydict["Timestamp"][:len(mydict[item])]
-        mydict["Timestamp"] = sorted(list(mydict["Timestamp"]))
         
         df = pd.DataFrame.from_dict(mydict)
         df.sort_values(by="Timestamp", inplace = True)
@@ -48,30 +47,12 @@ class canary_api():
         df = df.replace({None:np.nan}).infer_objects(copy=False)
         
         
-        temp = df.copy()
-        temp["delta"] = temp.Timestamp.diff()
-        index = temp.loc[temp["delta"] > pd.Timedelta(10, "m")].index - 1
-        if index.shape[0] > 0:
-            times = pd.date_range(start = temp.Timestamp[index].iloc[0].round("10T"), end = temp.Timestamp[index + 1].iloc[0].round("10T"), freq="10T")
-            start_time = times[0]
-            times = times[1:len(times)-1]
-            for time in times:
-                insert = temp.loc[temp.Timestamp == start_time].copy()
-                insert.Timestamp = time
-                temp = pd.concat([temp, insert], ignore_index = True)
-        
-        temp.sort_values("Timestamp", ascending=True, inplace=True)
-        temp = temp.drop(["delta"], axis = 1)
-        temp = temp.reset_index(drop=True)
-        df = temp.copy()
-        
-        
         return df
     
     
     
    
-    def get_aggregate_data(self, tags, start_time, end_time, aggregate_interval, aggregate, min_tags=2):
+    def get_aggregate_data(self, tags, start_time, end_time, aggregate_interval, aggregate, min_tags=1):
         
         server = self.server
         https_port = self.https_port
@@ -106,7 +87,7 @@ class canary_api():
                 while True:
                     reqBody = {
                         "apiToken":self.apiToken,
-                        "tags":tags,
+                        "tags":tag_subset,
                         "startTime":startTime,
                         "endTime":endTime,
                         "aggregateName":aggregateName,
@@ -116,7 +97,13 @@ class canary_api():
                         }
                     
                     # call the /getTagData2 endpoint to get data for the tags
-                    response = session.post(apiURL + "getTagData2", data=json.dumps(reqBody), verify = False)
+                    response = session.post(
+                        apiURL + "getTagData2",
+                        data=json.dumps(reqBody),
+                        verify=False,
+                        timeout=120
+                    )
+                    response.raise_for_status()
                     tagData = response.json()
                     
                     # check for errors
@@ -169,10 +156,10 @@ class canary_api():
             
 
         if results:
-            timestamp = results[0][["Timestamp"]].copy()
-            cleaned = [df.drop(columns=["Timestamp"]) for df in results]
-            merged = pd.concat([timestamp] + cleaned, axis=1)
-            return merged.sort_values("Timestamp").reset_index(drop=True)         
+            merged = results[0]
+            for result in results[1:]:
+                merged = pd.merge(merged, result, on="Timestamp", how="outer")
+            return merged.sort_values("Timestamp").reset_index(drop=True)
         else:
             print("All attempts failed.")
             return pd.DataFrame()

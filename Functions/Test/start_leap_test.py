@@ -220,8 +220,7 @@ def catch_up_new_tags(plant_name,turbine, new_tags, existing_tags, plant_start_d
 # Start:-
 
 def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, output_dir, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path):
-    tag_list_path=r'C:\Users\pkbu004\Box\#Renewables Shared Folder\206 - Wind\LEAP\Data Intake\(Internal Only) Data Intake Notes\Members and their channel lists\DTE\LEAP_Channel_List.xlsx'
-    tag_mapping_path=r'C:\Users\pkbu004\Box\#Renewables Shared Folder\206 - Wind\LEAP\Data Intake\(Internal Only) Data Intake Notes\Members and their channel lists\DTE\Tag_mapping_list_LEAP.csv'
+    # tag_list_path and tag_mapping_path are passed in as arguments
     raw = pd.read_excel(tag_list_path, sheet_name='Channel_Tags', engine='openpyxl', header=None)
     headers = raw.iloc[0].tolist()
     df = raw.iloc[1:].copy()
