@@ -349,7 +349,7 @@ def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, o
                 time.sleep(backoff * (2 ** attempt))
 
     log_data = fetch_tag_data(tags)
-    if log_data is None or log_data.any.empty:
+    if log_data is None or log_data.empty:
         raise RuntimeError('Canary API returned no data for the requested timestamp window')
 
     # CanaryAPI returns Timestamp as a column; accept an index-based response too.

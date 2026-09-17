@@ -15,7 +15,7 @@ import pysftp
 import paramiko
 import time
 from dotenv import dotenv_values
-from Functions.PI.channel_list_converter import convert_channel_list
+from Functions.channel_list_converter import convert_channel_list
 # =============================================================================
 # Logging:
 import logging
@@ -29,6 +29,8 @@ except:
     import PIconnect as PI
     from PIconnect.PIConsts import CalculationBasis, SummaryType,TimestampCalculation
 PI.PIConfig.DEFAULT_TIMEZONE = 'UTC'
+SFTP_MAX_ATTEMPTS = 100
+SFTP_RETRY_DELAY_SECONDS = 30
 # =============================================================================
 # get_utc_time:-
 def get_utc_time(time_value):
@@ -172,62 +174,95 @@ def log_tag_details(plant_name, tag_name, upload_time, log_excel_path):
 # catch_up_new_tags:-
 def catch_up_new_tags(plant_name, turbine, new_tags, existing_tags, plant_start_date, log_excel_path,
                        data_file_max_length, interval, output_dir, server_name, secret_path, log_sftp_path,
-                       SSH_KEY_PATH, pbar, tag_mapping_path, operating_state_tag=None, plant_level_tag=None,SFTP_en=True):
+                       SSH_KEY_PATH, pbar, tag_mapping_path, operating_state_tag=None, plant_level_tag=None,
+                       SFTP_en=True):
     log_df = pd.read_csv(log_excel_path) if os.path.exists(log_excel_path) else pd.DataFrame(columns=['Plant Name', 'Tag Name', 'Last Upload Time'])
 
-    # Get common end time from existing tags
-    if existing_tags:
-        existing_logs = log_df[log_df['Tag Name'].isin(existing_tags)]
-        if not existing_logs.empty:
-            common_end_time = get_utc_time(pd.to_datetime(existing_logs['Last Upload Time'].max()))
-        else:
-            common_end_time = None
-    else:
-        common_end_time = None
-
+    # Build per-tag start times
     final_tags = existing_tags.copy()
-
-    for tag in new_tags:
-
-        if tag in log_df['Tag Name'].values:
-            start_time = get_utc_time(
+    tag_start_times = {}
+    for tag in existing_tags:
+        tag_logs = log_df[(log_df['Plant Name'] == plant_name) & (log_df['Tag Name'] == tag)]
+        if not tag_logs.empty:
+            tag_start_times[tag] = get_utc_time(
                 pd.to_datetime(
-                    log_df[log_df['Tag Name'] == tag]['Last Upload Time'].max()
+                    tag_logs['Last Upload Time'].max()
                 ) + timedelta(minutes=interval)
             )
         else:
-            start_time = plant_start_date
+            tag_start_times[tag] = plant_start_date
 
-        end_time = common_end_time if common_end_time else datetime.now() - timedelta(days=1)
-        end_time = get_utc_time(datetime(end_time.year, end_time.month, end_time.day, 23, 59, 59))
+    end_time = datetime.now() - timedelta(days=1)
+    end_time = get_utc_time(datetime(end_time.year, end_time.month, end_time.day, 23, 59, 59))
 
-        while start_time < end_time:
+    # Continue until no tag needs catching up
+    interval_delta = timedelta(minutes=interval)
+    while True:
+        # Tags that still need pulling
+        pending = [t for t, st in tag_start_times.items() if st is not None and st < end_time]
+        if not pending:
+            break
 
-            interval_delta = timedelta(minutes=interval)
+        # Group pending tags by identical start_time so they can be pulled in batch
+        groups = {}
+        for t in pending:
+            st = tag_start_times[t]
+            groups.setdefault(st, []).append(t)
+
+        # Process groups in chronological order
+        for st in sorted(groups.keys()):
+            tags_group = groups[st]
 
             current_end_time = min(
-                get_utc_time(start_time + timedelta(days=data_file_max_length)) - interval_delta,
+                get_utc_time(st + timedelta(days=data_file_max_length)) - interval_delta,
                 end_time
             )
-            log_data_from_pi(tags=[tag], operating_state_tag=operating_state_tag, plant_level_tag=plant_level_tag,
-                             start_time=start_time, end_time=current_end_time, plant=plant_name, turbine=turbine,
+
+            # Pull all tags in this group together
+            log_data_from_pi(tags=tags_group, operating_state_tag=None, plant_level_tag=None,
+                             start_time=st, end_time=current_end_time, plant=plant_name, turbine=turbine,
                              log_excel_path=log_excel_path, server_name=server_name, output_dir=output_dir,
                              interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path,
-                             SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path,SFTP_en=SFTP_en)
+                             SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path,
+                             SFTP_en=SFTP_en)
 
-            pbar.update((current_end_time - start_time).total_seconds() // 60 // interval)
+            # Update progress bar: intervals pulled times number of tags in batch
+            intervals_pulled = int((current_end_time - st).total_seconds() // 60 // interval)
+            if intervals_pulled > 0:
+                pbar.update(intervals_pulled * len(tags_group))
 
-            start_time = current_end_time + interval_delta
+            # Advance each tag's start time
+            for t in tags_group:
+                tag_start_times[t] = current_end_time + interval_delta
+                final_tags.append(t)
 
-        final_tags.append(tag)
+    # Deduplicate final_tags while preserving order
+    seen = set()
+    deduped = []
+    for t in final_tags:
+        if t not in seen:
+            deduped.append(t)
+            seen.add(t)
+
+    final_tags = deduped
 
     return final_tags
 # =============================================================================
 # Start:-
 
-def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, output_dir, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path, SFTP_en):
+def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, output_dir, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path, SFTP_en=True):
+    workbook = pd.ExcelFile(tag_list_path, engine='openpyxl')
+    if 'Channel_Tags' in workbook.sheet_names:
+        sheet_name = 'Channel_Tags'
+    elif 'Tag_List' in workbook.sheet_names:
+        sheet_name = 'Tag_List'
+    else:
+        raise ValueError(
+            f"LEAP channel list must contain a 'Channel_Tags' or 'Tag_List' sheet; "
+            f"found: {workbook.sheet_names}"
+        )
 
-    raw = pd.read_excel(tag_list_path, sheet_name='Channel_Tags', engine='openpyxl', header=None)
+    raw = pd.read_excel(workbook, sheet_name=sheet_name, header=None)
     headers = raw.iloc[0].tolist()
     df = raw.iloc[1:].copy()
     df.columns = headers
@@ -235,6 +270,19 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
     df['PlantName'] = df['PlantName'].ffill()
     df['PI Server Name'] = df['PI Server Name'].ffill()
     df['Plant Start (COD)'] = pd.to_datetime(df['Plant Start (COD)'], errors='coerce').ffill()
+
+    missing_server = df['PI Server Name'].isna()
+    missing_start_date = df['Plant Start (COD)'].isna()
+    if missing_server.any() or missing_start_date.any():
+        missing_fields = []
+        if missing_server.any():
+            missing_fields.append('PI Server Name')
+        if missing_start_date.any():
+            missing_fields.append('Plant Start (COD)')
+        raise ValueError(
+            f"LEAP channel list '{sheet_name}' is missing required values: "
+            f"{', '.join(missing_fields)}. Provide these values before running."
+        )
 
     cols = df.columns.tolist()
 
@@ -263,6 +311,10 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
         plant_power_col = "Plant Active Power"
         plantlevel_tags = plant_df[plant_power_col].dropna().astype(str).str.strip().unique().tolist()
         plant_level_tag = plantlevel_tags[0] if plantlevel_tags else None
+        turbine_tag_count=sum(pd.notna(row.get(column, np.nan)) and str(row[column]).strip()!=plant_level_tag
+                              
+                              for _,row in plant_df.iterrows()
+                              for column in cols[tag_start_idx:])
 
         total_steps = 0
 
@@ -272,6 +324,7 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
         total_steps += len(plant_df) * int(((end_date - plant_start_date).total_seconds() // 60) // interval)
 
         pbar = tqdm(total=max(total_steps, 1), desc=f"{plant}", unit="interval")
+        pbar=tqdm(total=max(total_steps,1),desc=(f"{plant}: pulling {turbine_tag_count} turbine tags and" f"{len(plantlevel_tags)} site tags from " f"{plant_start_date: %Y-%m-%d} to {end_date:%Y-%m-%d}"), unit = "interval")
 
         if plant_level_tag:
 
@@ -311,59 +364,67 @@ def start_leap(tag_list_path, log_file_path, data_file_max_length, interval, out
             # Load log file
             if os.path.exists(plant_log_file_path):
                 log_df = pd.read_csv(plant_log_file_path)
-                logged_tags = log_df['Tag Name'].unique().tolist()
+                logged_tags = log_df.loc[log_df['Plant Name'] == plant, 'Tag Name'].unique().tolist()
             else:
                 logged_tags = []
 
             # Split tags
             existing_tags = [t for t in turbine_tags if t in logged_tags]
             new_tags = [t for t in turbine_tags if t not in logged_tags]
-
+            #existing_tags=[]
             # Catch up new tags
-            if new_tags:
+            print(f"pulling: {turbine}")
+            if existing_tags:
                 turbine_tags = catch_up_new_tags(plant_name=plant, turbine=turbine, new_tags=new_tags,
                                                  existing_tags=existing_tags, plant_start_date=plant_start_date,
                                                  log_excel_path=plant_log_file_path, data_file_max_length=data_file_max_length,
                                                  interval=interval, output_dir=output_dir, server_name=server_name,
                                                  secret_path=secret_path, log_sftp_path=log_sftp_path,
                                                  SSH_KEY_PATH=SSH_KEY_PATH, pbar=pbar, tag_mapping_path=tag_mapping_path,
-                                                 operating_state_tag=operating_state_tag, plant_level_tag=plant_level_tag)
+                                                 operating_state_tag=operating_state_tag, plant_level_tag=plant_level_tag,
+                                                 SFTP_en=SFTP_en)
             
             current_start = _last_upload_for_tagset(
-                plant_log_file_path, plant, turbine_tags, plant_start_date
+                plant_log_file_path, plant, new_tags, plant_start_date
             )
+            if new_tags:
+                while current_start < end_date:
 
-            while current_start < end_date:
-
-                current_end = min(
-                    get_utc_time(current_start + timedelta(days=data_file_max_length)) - timedelta(minutes=interval),
-                    end_date
-                )
-                log_data_from_pi(tags=turbine_tags, operating_state_tag=operating_state_tag, plant_level_tag=None, start_time=current_start, end_time=current_end, plant=plant, turbine=turbine, log_excel_path=plant_log_file_path, server_name=server_name, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path, SFTP_en=SFTP_en)
-
-                pbar.update(1)
-                current_start = current_end + timedelta(minutes=interval)
+                    current_end = min(
+                        get_utc_time(current_start + timedelta(days=data_file_max_length)) - timedelta(minutes=interval),
+                        end_date
+                    )
+                    log_data_from_pi(tags=new_tags, operating_state_tag=operating_state_tag, plant_level_tag=None, start_time=current_start, end_time=current_end, plant=plant, turbine=turbine, log_excel_path=plant_log_file_path, server_name=server_name, output_dir=output_dir, interval=interval, secret_path=secret_path, log_sftp_path=log_sftp_path, SSH_KEY_PATH=SSH_KEY_PATH, tag_mapping_path=tag_mapping_path, SFTP_en=SFTP_en)
+                    pbar.update(1)
+                    current_start = current_end + timedelta(minutes=interval)
 
         pbar.close()
 # =============================================================================
 def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end_time,
                      plant, turbine, log_excel_path, server_name, output_dir,
-                     interval, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path, SFTP_en):
+                     interval, secret_path, log_sftp_path, SSH_KEY_PATH, tag_mapping_path,
+                     SFTP_en=True):
     tag_mapping_df = pd.read_csv(tag_mapping_path)
     tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
     start_time = get_utc_time(pd.to_datetime(start_time))
     end_time = get_utc_time(pd.to_datetime(end_time) + timedelta(minutes=interval))
-
-    turbine_zip_path = ''
-    plant_zip_path = ''
+    turbine_zip_path=''
+    plant_zip_path=''
+    normal_tag_being_pulled=0
+    op_tag_being_pulled=0
+    plant_tag_being_pulled=0
+    SFTP = SFTP_en
 
     tags = list(tags)
     op_tag = operating_state_tag
+
     normal_tags = [t for t in tags if t not in [op_tag, plant_level_tag]]
 
     results = []
+    plant_level_results = []
 
-    # Collect PI points once and operate within the provided start_time/end_time window
+
+
     with PI.PIServer(server=server_name) as server:
         all_points = {}
         for tag in tags:
@@ -371,10 +432,115 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
             if pts:
                 all_points[tag] = pts[0]
 
-        # 1) Plant-level data (only when called for plant-level turbine)
-        plant_level_data = None
-        if turbine == 'PlantLevel' and plant_level_tag is not None and plant_level_tag in all_points:
+
+    for tag in normal_tags:
+
+        if tag not in all_points:
+            continue
+        point = all_points[tag]
+        normal_tag_being_pulled=1
+        if not op_tag_being_pulled:
+            op_tag_being_pulled=0
+        plant_tag_being_pulled=0
+
+        summaries = point.summaries(
+            start_time, end_time, f'{interval}m',
+            SummaryType.AVERAGE | SummaryType.MINIMUM | SummaryType.MAXIMUM | SummaryType.STD_DEV,
+            calculation_basis=CalculationBasis.TIME_WEIGHTED,
+            time_type=TimestampCalculation.EARLIEST_TIME
+        )
+        df = summaries.reset_index()
+        df.rename(columns={
+            'AVERAGE': f'{tag}_Avg',
+            'MINIMUM': f'{tag}_Min',
+            'MAXIMUM': f'{tag}_Max',
+            'STD_DEV': f'{tag}_StD'
+        }, inplace=True)       
+
+        results.append(df.rename(columns=tag_mapping_dict))
+    
+    if op_tag:
+
+
+        if op_tag in all_points:
+            op_tag_being_pulled=1
+            if not normal_tag_being_pulled:
+                normal_tag_being_pulled=0
+            plant_tag_being_pulled=0
+            point = all_points[op_tag]
+    
+            series = point.recorded_values(start_time, end_time,boundary_type='Inside')
+    
+            # Create all expected interval endpoints
+            full_index = pd.date_range(
+                start=start_time,
+                end=end_time,
+                freq=f'{interval}min'
+            )
+    
+            if not series.empty:
+                series = (
+                    series
+                    .resample(
+                        f'{interval}min',
+                        closed='right',
+                        label='right'
+                    )
+                    .last()
+                    .ffill()
+                )
+    
+                # Force all timestamps to exist
+                series = series.reindex(full_index)
+    
+            else:
+                # No data at all
+                series = pd.Series(
+                    index=full_index,
+                    dtype='object'
+                )
+    
+            # Replace NaN with blank string if desired
+            series = series.fillna('')
+    
+            df = series.reset_index()
+            df.columns = ['timestamp', f'{op_tag}']
+    
+        else:
+            df = None
+    
+        if df is not None:
+            results.append(df.rename(columns=tag_mapping_dict))
+
+    # if op_tag:
+
+    #     if op_tag in all_points:
+    #         point = all_points[op_tag]
+
+    #         summaries = point.summaries(
+    #             start_time, end_time, f'{interval}m',
+    #             SummaryType.AVERAGE,
+    #             calculation_basis=CalculationBasis.TIME_WEIGHTED,
+    #             time_type=TimestampCalculation.EARLIEST_TIME
+    #         )
+    #         df = summaries.reset_index()
+    #         df.rename(columns={'AVERAGE': f'{op_tag}_Avg'})
+    #     else:
+    #         df = None
+
+
+    #     if df is not None:
+    #         results.append(df.rename(columns=tag_mapping_dict))
+
+
+    if turbine == "PlantLevel" and plant_level_tag:
+        plant_tag_being_pulled=1
+        op_tag_being_pulled=0
+        normal_tag_being_pulled=0
+
+        if plant_level_tag in all_points:
             point = all_points[plant_level_tag]
+
             summaries = point.summaries(
                 start_time, end_time, f'{interval}m',
                 SummaryType.AVERAGE | SummaryType.MINIMUM | SummaryType.MAXIMUM | SummaryType.STD_DEV,
@@ -388,140 +554,129 @@ def log_data_from_pi(tags, operating_state_tag, plant_level_tag, start_time, end
                 'MAXIMUM': f'{plant_level_tag}_Max',
                 'STD_DEV': f'{plant_level_tag}_StD'
             }, inplace=True)
-            plant_level_data = df.rename(columns=tag_mapping_dict)
 
-        # If plant-level data present, write/upload and log
-        if plant_level_data is not None:
-            plant_level_data = plant_level_data.rename(columns={"index": "timestamp"})
-            plant_level_data['timestamp'] = pd.to_datetime(plant_level_data['timestamp']).dt.round('s')
-            plant_level_data = plant_level_data.sort_values(by='timestamp')
+            plant_level_results.append(df.rename(columns=tag_mapping_dict))
 
-            current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-            plant_base_name = f"{plant.replace(' ', '_')}_Plant_{current_time}"
-            plant_csv_path = os.path.join(output_dir, f"{plant_base_name}.csv")
-            plant_zip_path = os.path.join(output_dir, f"{plant_base_name}.zip")
+    if results:
+        log_data = results[0]
+        temp=[1]
+        plant_level_data=pd.DataFrame({'temp':temp})
+        #plant_level_data=4
+        for df in results[1:]:
+            log_data= log_data.rename(columns={"index": "timestamp"})
+            df= df.rename(columns={"index": "timestamp"})
 
-            plant_level_data.to_csv(plant_csv_path, index=False)
-            with zipfile.ZipFile(plant_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                zipf.write(plant_csv_path, os.path.basename(plant_csv_path))
-            try:
-                os.remove(plant_csv_path)
-            except OSError:
-                pass
 
-            if SFTP_en:
-                sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
-            else:
-                sftp_success = True
+            log_data = pd.merge(log_data, df, on='timestamp', how='outer')
+        
+        if 'index' in log_data.columns:
+            log_data=log_data.rename(columns={'index':'timestamp'})
 
-            time.sleep(1)
-            if sftp_success:
-                last_upload_time = None
-                if 'timestamp' in plant_level_data.columns:
-                    last_upload_time = plant_level_data['timestamp'].max()
-                if last_upload_time is not None:
-                    log_tag_details(plant, plant_level_tag, last_upload_time, log_excel_path)
-                if os.path.exists(plant_zip_path):
-                    try:
-                        os.remove(plant_zip_path)
-                    except OSError:
-                        pass
-            else:
-                print("Please Retry, Problem in SFTP connection for plant-level data")
-                return
+        log_data['timestamp'] = pd.to_datetime(log_data['timestamp']).dt.round('s')
+        log_data = log_data.sort_values(by='timestamp')
 
-        # 2) Turbine-level: pull stats for normal tags (all stats in one summaries call per tag)
-        for tag in normal_tags:
-            if tag not in all_points:
-                continue
-            point = all_points[tag]
-            summaries = point.summaries(
-                start_time, end_time, f'{interval}m',
-                SummaryType.AVERAGE | SummaryType.MINIMUM | SummaryType.MAXIMUM | SummaryType.STD_DEV,
-                calculation_basis=CalculationBasis.TIME_WEIGHTED,
-                time_type=TimestampCalculation.EARLIEST_TIME
-            )
-            df = summaries.reset_index()
-            df.rename(columns={
-                'AVERAGE': f'{tag}_Avg',
-                'MINIMUM': f'{tag}_Min',
-                'MAXIMUM': f'{tag}_Max',
-                'STD_DEV': f'{tag}_StD'
-            }, inplace=True)
-            results.append(df.rename(columns=tag_mapping_dict))
+        current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
 
-        # Merge stat DataFrames for turbine
-        turbine_log_data = None
-        if results:
-            turbine_log_data = results[0]
-            for df in results[1:]:
-                turbine_log_data = pd.merge(turbine_log_data, df, on='timestamp', how='outer')
-            turbine_log_data['timestamp'] = pd.to_datetime(turbine_log_data['timestamp']).dt.round('s')
-            turbine_log_data = turbine_log_data.sort_values(by='timestamp')
+        turbine_base_name = f"{plant.replace(' ', '_')}_{turbine}_{current_time}"
+        turbine_csv_path = os.path.join(output_dir, f"{turbine_base_name}.csv")
+        turbine_zip_path = os.path.join(output_dir, f"{turbine_base_name}.zip")
 
-        # 3) Pull op tag separately and merge
-        op_df = None
-        if op_tag is not None and op_tag in all_points:
-            point = all_points[op_tag]
-            summaries = point.summaries(
-                start_time, end_time, f'{interval}m',
-                SummaryType.AVERAGE,
-                calculation_basis=CalculationBasis.TIME_WEIGHTED,
-                time_type=TimestampCalculation.EARLIEST_TIME
-            )
-            op_df = summaries.reset_index()
-            op_df.rename(columns={'AVERAGE': f'{op_tag}_Avg'}, inplace=True)
-            op_df = op_df.rename(columns=tag_mapping_dict)
+        log_data.to_csv(turbine_csv_path, index=False)
 
-        if op_df is not None:
-            if turbine_log_data is None:
-                turbine_log_data = op_df
-            else:
-                turbine_log_data = pd.merge(turbine_log_data, op_df, on='timestamp', how='outer')
+        with zipfile.ZipFile(turbine_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(turbine_csv_path, os.path.basename(turbine_csv_path))
+            time.sleep(2)
+            os.remove(turbine_csv_path)
 
-        # Write/upload/log turbine data if present
-        if turbine_log_data is not None:
-            current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-            turbine_base_name = f"{plant.replace(' ', '_')}_{turbine}_{current_time}"
-            turbine_csv_path = os.path.join(output_dir, f"{turbine_base_name}.csv")
-            turbine_zip_path = os.path.join(output_dir, f"{turbine_base_name}.zip")
+        sftp_success = True
+        if SFTP:
+            max_attempts = SFTP_MAX_ATTEMPTS
+            sleep_time = SFTP_RETRY_DELAY_SECONDS
+            sftp_success = False
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    sftp_success = upload_via_sftp(turbine_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+                except Exception as e:
+                    logging.error(f'Turbine SFTP upload attempt {attempt} failed: {e}')
+                    sftp_success = False
 
-            turbine_log_data.to_csv(turbine_csv_path, index=False)
-            with zipfile.ZipFile(turbine_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                zipf.write(turbine_csv_path, os.path.basename(turbine_csv_path))
-            try:
-                os.remove(turbine_csv_path)
-            except OSError:
-                pass
+                if sftp_success:
+                    break
+                if attempt < max_attempts:
+                    logging.info(f'Retrying turbine SFTP in {sleep_time} seconds (attempt {attempt + 1}/{max_attempts})')
+                    time.sleep(sleep_time)
 
-            if SFTP_en:
-                sftp_success = upload_via_sftp(turbine_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
-            else:
-                sftp_success = True
+        if not sftp_success:
+            logging.error('Turbine SFTP upload failed after max retries')
+        else:
+            if os.path.exists(turbine_zip_path):
+                os.remove(turbine_zip_path)
+            uploaded_tags = [tag for tag in normal_tags if tag in all_points]
+            if op_tag in all_points:
+                uploaded_tags.append(op_tag)
+            if uploaded_tags and not log_data.empty and log_data['timestamp'].notna().any():
+                last_upload_time = log_data['timestamp'].max()
+                for tag in uploaded_tags:
+                    log_tag_details(plant, tag, last_upload_time, log_excel_path)
 
-            time.sleep(1)
-            if sftp_success:
-                last_upload_time = None
-                if 'timestamp' in turbine_log_data.columns:
-                    last_upload_time = turbine_log_data['timestamp'].max()
 
-                all_logged_tags = set()
-                if tags:
-                    all_logged_tags.update(tags)
-                if operating_state_tag:
-                    all_logged_tags.add(operating_state_tag)
-                if plant_level_tag:
-                    all_logged_tags.add(plant_level_tag)
 
-                if last_upload_time is not None:
-                    for ttag in all_logged_tags:
-                        log_tag_details(plant, ttag, last_upload_time, log_excel_path)
 
-                if os.path.exists(turbine_zip_path):
-                    try:
-                        os.remove(turbine_zip_path)
-                    except OSError:
-                        pass
-            else:
-                print("Please Retry, Problem in SFTP connection for turbine data")
-                return
+    if plant_level_results:
+        plant_level_data = plant_level_results[0]
+        plant_level_data= plant_level_data.rename(columns={"index": "timestamp"})
+        plant_level_data['timestamp'] = pd.to_datetime(plant_level_data['timestamp']).dt.round('s')
+        plant_level_data = plant_level_data.sort_values(by='timestamp')
+
+        current_time = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+
+        plant_base_name = f"{plant.replace(' ', '_')}_Plant_{current_time}"
+        plant_csv_path = os.path.join(output_dir, f"{plant_base_name}.csv")
+        plant_zip_path = os.path.join(output_dir, f"{plant_base_name}.zip")
+
+        plant_level_data.to_csv(plant_csv_path, index=False)
+
+        with zipfile.ZipFile(plant_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(plant_csv_path, os.path.basename(plant_csv_path))
+            os.remove(plant_csv_path)
+        time.sleep(5)
+
+        if SFTP:
+            max_attempts = SFTP_MAX_ATTEMPTS
+            sleep_time = SFTP_RETRY_DELAY_SECONDS
+
+            sftp_success = False
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+                except Exception as e:
+                    logging.error(f'SFTP upload attempt {attempt} failed: {e}')
+                    sftp_success = False
+
+                if sftp_success:
+                    break
+                if not sftp_success and attempt < max_attempts:
+                    logging.info(f'Retrying SFTP in {sleep_time} seconds (attempt {attempt + 1}/{max_attempts})')
+                    time.sleep(sleep_time)
+
+        else:
+            sftp_success = True
+
+
+
+    
+        if sftp_success:
+            if (plant_tag_being_pulled and plant_level_tag in all_points
+                    and not plant_level_data.empty
+                    and plant_level_data['timestamp'].notna().any()):
+                log_tag_details(plant, plant_level_tag, plant_level_data['timestamp'].max(), log_excel_path)
+            if os.path.exists(plant_zip_path):
+                os.remove(plant_zip_path)
+            if os.path.exists(turbine_zip_path):
+                os.remove(turbine_zip_path)
+    return
+
+
+
+# =============================================================================
+

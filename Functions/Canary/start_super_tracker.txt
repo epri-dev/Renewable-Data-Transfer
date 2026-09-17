@@ -51,7 +51,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
     USE_SSH_KEY = bool(int(secrets.get('USE_SSHKEY', 0)))
     SLEEP_TIME = int(secrets.get('SLEEP_TIME', 30))
     MAX_COUNT = int(secrets.get('MAX_COUNT', 3))
-    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER_SUPER')
+    REMOTE_DIR = secrets.get('REMOTE_UPLOAD_FOLDER')
     HOST = secrets.get('SFTP_HOST')
     USERNAME = secrets.get('SFTP_USERNAME')
 
@@ -132,6 +132,7 @@ def upload_via_sftp(local_path,secrets,log_dir,SSH_KEY_PATH):
         logger.error('Max retry attempts reached. Upload failed.')
 
     return success
+
 # =============================================================================
 # log_tag_details:-
 def log_tag_details(plant_name, tag_name, upload_time, log_excel_path):
@@ -218,13 +219,11 @@ def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, las
     return final_tags
 # =============================================================================
 # Start:-
-def start_super(tag_list_path, log_file_path, data_file_max_length, interval, output_dir,secret_path,channel_list_version_flag,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en):
+def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, interval, output_dir,secret_path,channel_list_version_flag,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en):
     if interval <= 0 or data_file_max_length <= 0:
         raise ValueError('interval and data_file_max_length must be greater than zero')
 
-    df = pd.read_excel(tag_list_path, sheet_name='Channel_Tags')
-    if channel_list_version_flag==1:
-        df=convert_channel_list(tag_list_path)
+    df = pd.read_excel(tag_list_path, sheet_name='Tracker_Tags')
 
     df['PlantName'] = df['PlantName'].ffill()  # Forward fill plant names and start dates
     df['ServerName'] = df['PI Server Name'].ffill() # Forward fill SERVERNAME
@@ -273,7 +272,10 @@ def start_super(tag_list_path, log_file_path, data_file_max_length, interval, ou
         end_date = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
         end_date = get_utc_time(end_date)  # Convert to UTC
 
-        metadata_columns = {'PlantName', 'PI Server Name', 'Plant Start (COD)', 'ServerName'}
+        metadata_columns = {
+            'PlantName', 'PI Server Name', 'Plant Start (COD)',
+            'ServerName', 'Inverter Name'
+        }
         tags = []
         for col in group.columns:
             if col in metadata_columns:
@@ -341,7 +343,7 @@ def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, o
                 )
             except Exception as exc:
                 logging.warning(
-                    'Error fetching SUPER data from Canary API (attempt %s): %s',
+                    'Error fetching SUPER tracker data from Canary API (attempt %s): %s',
                     attempt + 1, exc
                 )
                 if attempt == attempts - 1:
@@ -349,7 +351,8 @@ def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, o
                 time.sleep(backoff * (2 ** attempt))
 
     log_data = fetch_tag_data(tags)
-    if log_data is None or log_data.any.empty:
+
+    if log_data is None or log_data.empty:
         raise RuntimeError('Canary API returned no data for the requested timestamp window')
 
     # CanaryAPI returns Timestamp as a column; accept an index-based response too.
@@ -365,17 +368,12 @@ def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, o
     # Ensure numeric columns are properly typed
     numeric_cols = log_data.columns.drop('timestamp')
     log_data[numeric_cols] = log_data[numeric_cols].apply(pd.to_numeric, errors='coerce')
-    
-    # Apply tag mapping
-    tag_mapping_df = pd.read_csv(tag_mapping_path)
-    tag_mapping_dict = dict(zip(tag_mapping_df['old tags'], tag_mapping_df['new tags']))
-    log_data.rename(columns=tag_mapping_dict, inplace=True)
 
     current_time= datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
 
     # Paths for saving files
-    output_csv_path = os.path.join(output_dir, f'{plant.replace(" ", "_")}_{current_time}.csv')
-    zip_file_path = os.path.join(output_dir, f'{plant.replace(" ", "_")}_{current_time}.zip')
+    output_csv_path = os.path.join(output_dir, f'{plant.replace(' ', '_')}_{current_time}.csv')
+    zip_file_path = os.path.join(output_dir, f'{plant.replace(' ', '_')}_{current_time}.zip')
 
     # Save the log data to a CSV file
     log_data = log_data.sort_values(by='timestamp')
@@ -385,7 +383,6 @@ def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, o
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         zipf.write(output_csv_path, os.path.basename(output_csv_path))
         os.remove(output_csv_path)
-
     if SFTP_en:
         sftp_success=upload_via_sftp(zip_file_path,secret_path,log_sftp_path,SSH_KEY_PATH)
         if sftp_success:
@@ -404,5 +401,4 @@ def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, o
     else:
         print("Please Retry, Problem in SFTP connection")
         return
-
 # =============================================================================

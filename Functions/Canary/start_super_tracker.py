@@ -23,6 +23,7 @@ import logging
 # =============================================================================
 # Canary API Setup:
 conn = canary_api()
+TRACKER_INTERVAL = timedelta(days=1)
 # =============================================================================
 # get_utc_time:-
 def get_utc_time(time_value):
@@ -169,7 +170,9 @@ def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, las
     log_df = pd.read_csv(log_excel_path) if os.path.exists(log_excel_path) else pd.DataFrame(columns=['Plant Name', 'Tag Name', 'Last Upload Time'])
 
     if existing_tags:
-        existing_last_upload_times = log_df[log_df['Tag Name'].isin(existing_tags)]['Last Upload Time']
+        existing_last_upload_times = log_df[
+            (log_df['Plant Name'] == plant_name) & log_df['Tag Name'].isin(existing_tags)
+        ]['Last Upload Time']
         if not existing_last_upload_times.empty:
             common_end_time = pd.to_datetime(existing_last_upload_times.max())  # Latest upload time among existing tags
             common_end_time = get_utc_time(common_end_time)
@@ -178,41 +181,49 @@ def catch_up_new_tags(plant_name, new_tags, existing_tags, plant_start_date, las
     else:
         common_end_time = None
 
+    final_tags = existing_tags.copy()
+
     for tag in new_tags:
         # Fetch last upload time for the specific tag
-        if tag in log_df['Tag Name'].values:
-            tag_last_upload_time = pd.to_datetime(log_df[log_df['Tag Name'] == tag]['Last Upload Time'].max()) + timedelta(minutes=interval)
+        tag_logs = log_df[(log_df['Plant Name'] == plant_name) & (log_df['Tag Name'] == tag)]
+        if not tag_logs.empty:
+            tag_last_upload_time = pd.to_datetime(tag_logs['Last Upload Time'].max()) + TRACKER_INTERVAL
             tag_last_upload_time = get_utc_time(tag_last_upload_time)
         else:
             tag_last_upload_time = plant_start_date  # Start from plant start date if the tag is new
 
         start_time = tag_last_upload_time
         end_time = common_end_time if common_end_time else datetime.now() - timedelta(days=1)
-    ####
-    end_time = datetime(end_time.year, end_time.month, end_time.day, 23, 59, 59)  # End of yesterday
-    end_time = get_utc_time(end_time)  # Convert to UTC
+        end_time = datetime(end_time.year, end_time.month, end_time.day, 23, 59, 59)
+        end_time = get_utc_time(end_time)
 
-    while start_time < end_time:
-        # Calculate the interval delta based on the provided interval
-        interval_delta = timedelta(minutes=interval)
+        while start_time < end_time:
+            interval_delta = TRACKER_INTERVAL
+            current_end_time = min(
+                get_utc_time(start_time + timedelta(days=data_file_max_length)) - interval_delta,
+                end_time
+            )
+            pbar.set_description(
+                f"Pulling data for '{plant_name}', between {pd.to_datetime(start_time).date()}, and {pd.to_datetime(end_time).date()}")
+            log_data_from_canary(
+                pd.DataFrame([tag]), start_time, current_end_time, plant_name,
+                log_excel_path, output_dir, interval, secret_path, log_sftp_path,
+                SSH_KEY_PATH, tag_mapping_path, SFTP_en
+            )
+            steps = max(1, int((current_end_time - start_time).total_seconds() // TRACKER_INTERVAL.total_seconds()))
+            pbar.update(steps)
+            start_time = current_end_time + interval_delta
 
-        # Calculate the end time for this chunk
-        current_end_time = min(get_utc_time(start_time + timedelta(days=data_file_max_length)) - interval_delta, end_time)
-        pbar.set_description(
-            f"Pulling data for '{plant_name}', between {pd.to_datetime(start_time).date()}, and {pd.to_datetime(end_time).date()}")
-
-        # Process the new tags for the catch-up period
-        log_data_from_canary(pd.DataFrame(new_tags).transpose(), start_time, current_end_time, plant_name, log_excel_path, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en)
-        pbar.update(len(new_tags) * (current_end_time - start_time).total_seconds() // 60 // interval)
-
-        # Move the start time forward by one interval
-        start_time = current_end_time + interval_delta
+        final_tags.append(tag)
 
     # After catching up, merge the new and existing tags for continuous processing
-    return existing_tags + new_tags
+    return final_tags
 # =============================================================================
 # Start:-
 def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, interval, output_dir,secret_path,channel_list_version_flag,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en):
+    if interval <= 0 or data_file_max_length <= 0:
+        raise ValueError('interval and data_file_max_length must be greater than zero')
+
     df = pd.read_excel(tag_list_path, sheet_name='Tracker_Tags')
 
     df['PlantName'] = df['PlantName'].ffill()  # Forward fill plant names and start dates
@@ -225,7 +236,7 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
 
     for plant, group in df.groupby('PlantName'):  
           
-        plant_start_date = pd.to_datetime(group.iloc[0, 2])
+        plant_start_date = pd.to_datetime(group['Plant Start (COD)'].iloc[0])
         plant_start_date = get_utc_time(plant_start_date)  # Convert to UTC
 
         plant_log_file_path = os.path.join(log_file_path, f"{plant}_log.csv")
@@ -236,7 +247,7 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
                 plant_tag_df = log_df[(log_df['Plant Name'] == plant)]
                 if not plant_tag_df.empty:
                     last_upload_time = pd.to_datetime(plant_tag_df['Last Upload Time'].max())
-                    last_upload_time = last_upload_time + timedelta(minutes=interval)
+                    last_upload_time = last_upload_time + TRACKER_INTERVAL
                     last_upload_time = get_utc_time(last_upload_time)  # Convert to UTC
                     existing_tags = plant_tag_df['Tag Name'].tolist() 
                     # pbar.update(np.ceil((last_upload_time - plant_start_date).total_seconds() // 60 // interval)*len(existing_tags))
@@ -262,27 +273,38 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
         end_date = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
         end_date = get_utc_time(end_date)  # Convert to UTC
 
+        metadata_columns = {
+            'PlantName', 'PI Server Name', 'Plant Start (COD)',
+            'ServerName', 'Inverter Name'
+        }
         tags = []
-        for col in group.columns[3:-1]:
+        for col in group.columns:
+            if col in metadata_columns:
+                continue
             transposed_column = group[col].tolist()
             tags.extend(transposed_column)
         
-        tags = [tag for tag in tags if pd.notna(tag)]
+        tags = [str(tag).strip() for tag in tags if pd.notna(tag) and str(tag).strip()]
         new_tags = [tag for tag in tags if tag not in existing_tags]
         server_name = group['ServerName'].iloc[0] 
-        total_intervals = int((end_date - last_upload_time).total_seconds() // 60 // interval)
+        total_intervals = int((end_date - last_upload_time).total_seconds() // TRACKER_INTERVAL.total_seconds())
         total_steps = len(tags) * max(total_intervals, 1)
 
         pbar = tqdm(total=total_steps, desc=f"{plant}", unit="pts")
         # Catch up for new tags
         if new_tags:
             tags = catch_up_new_tags(plant, new_tags, existing_tags, plant_start_date, last_upload_time, plant_log_file_path, data_file_max_length, interval, output_dir, server_name,secret_path,log_sftp_path,SSH_KEY_PATH,pbar,tag_mapping_path,SFTP_en)
+            if os.path.exists(plant_log_file_path):
+                updated_log_df = pd.read_csv(plant_log_file_path)
+                plant_uploads = updated_log_df[updated_log_df['Plant Name'] == plant]['Last Upload Time']
+                if not plant_uploads.empty:
+                    last_upload_time = get_utc_time(pd.to_datetime(plant_uploads.max())) + TRACKER_INTERVAL
         tag_chunks = [tags[i:i + 1000] for i in range(0, len(tags), 1000)]
     
         for i, chunk in enumerate(tag_chunks):
             current_start_date = last_upload_time
             while current_start_date < end_date:
-                interval_delta = timedelta(minutes=interval)    
+                interval_delta = TRACKER_INTERVAL
                 current_end_date = min(get_utc_time(current_start_date + timedelta(days=data_file_max_length)) - interval_delta, end_date)
                
                 log_data_from_canary(pd.DataFrame(chunk).transpose(), current_start_date, current_end_date, plant, plant_log_file_path, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en)
@@ -294,30 +316,56 @@ def start_tracker_super(tag_list_path, log_file_path, data_file_max_length, inte
                 })
                 # pbar.update(len(tags) * (current_end_date - current_start_date).total_seconds() // 60 // interval)
                 current_start_date = current_end_date + interval_delta
+            pbar.close()
 # =============================================================================
 # log_data_from_canary:- 
 def log_data_from_canary(tags_df, start_time, end_time, plant, log_excel_path, output_dir, interval,secret_path,log_sftp_path,SSH_KEY_PATH,tag_mapping_path,SFTP_en):
     start_time = get_utc_time(pd.to_datetime(start_time))
-    end_time = get_utc_time(pd.to_datetime(end_time)+timedelta(minutes=interval))
+    end_time = get_utc_time(pd.to_datetime(end_time) + TRACKER_INTERVAL)
 
     # Get tags as Series (expected format for Canary API)
     tags = pd.Series(tags_df.values.flatten().tolist())
     
-    # Format start/end dates for Canary API (M/D/YYYY format)
-    start_str = start_time.strftime('%m/%d/%Y')
-    end_str = end_time.strftime('%m/%d/%Y')
+    # Keep the time component so each chunk matches its checkpoint window.
+    start_str = start_time.strftime('%m/%d/%Y %H:%M:%S')
+    end_str = end_time.strftime('%m/%d/%Y %H:%M:%S')
     
-    # Fetch data from Canary API using StandardDeviationSample
-    try:
-        log_data = conn.get_aggregate_data(tags, start_str, end_str, f'{interval}d', 'StandardDeviationSample')
-    except Exception as e:
-        print(f"Error fetching data from Canary API: {e}")
-        time.sleep(1800)  # Wait for 30 minutes before retrying
-        log_data = conn.get_aggregate_data(tags, start_str, end_str, f'{interval}d', 'StandardDeviationSample')
-    # Index is already named 'Timestamp', rename to 'timestamp' and reset
-    log_data.index.name = 'timestamp'
-    log_data = log_data.reset_index()
-    log_data['timestamp'] = pd.to_datetime(log_data['timestamp']).dt.round('s')
+    def fetch_tag_data(tag_list):
+        if not tag_list:
+            return None
+
+        tag_series = pd.Series(tag_list)
+        attempts = 3
+        backoff = 60
+        for attempt in range(attempts):
+            try:
+                return conn.get_aggregate_data(
+                    tag_series, start_str, end_str, '1d', 'StandardDeviationSample'
+                )
+            except Exception as exc:
+                logging.warning(
+                    'Error fetching SUPER tracker data from Canary API (attempt %s): %s',
+                    attempt + 1, exc
+                )
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(backoff * (2 ** attempt))
+
+    log_data = fetch_tag_data(tags)
+
+    if log_data is None or log_data.empty:
+        raise RuntimeError('Canary API returned no data for the requested timestamp window')
+
+    # CanaryAPI returns Timestamp as a column; accept an index-based response too.
+    if 'Timestamp' in log_data.columns:
+        log_data = log_data.rename(columns={'Timestamp': 'timestamp'})
+    elif 'timestamp' not in log_data.columns:
+        index_name = log_data.index.name
+        log_data = log_data.reset_index()
+        timestamp_column = index_name if index_name in log_data.columns else log_data.columns[0]
+        log_data = log_data.rename(columns={timestamp_column: 'timestamp'})
+
+    log_data['timestamp'] = pd.to_datetime(log_data['timestamp'], utc=True).dt.round('s')
     # Ensure numeric columns are properly typed
     numeric_cols = log_data.columns.drop('timestamp')
     log_data[numeric_cols] = log_data[numeric_cols].apply(pd.to_numeric, errors='coerce')

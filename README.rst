@@ -253,14 +253,3 @@ Security Considerations
   operating in a strict security environment.
 
 ---
-
-Disclaimer
-----------
-
-Copyright © Electric Power Research Institute, Inc. (EPRI). All rights reserved.
-
-This software is provided for authorized use under applicable EPRI agreements.
-Use, modification, and distribution are subject to EPRI policies and
-contractual terms. EPRI makes no warranties, express or implied, regarding
-fitness for a particular purpose or the accuracy of results produced by this
-software.
