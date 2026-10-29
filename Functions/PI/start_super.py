@@ -272,7 +272,7 @@ def start_super(tag_list_path, log_file_path, data_file_max_length, interval, ou
         end_date = get_utc_time(end_date)  # Convert to UTC
 
         tags = []
-        for col in group.columns[4:-1]:
+        for col in group.columns[6:-1]:
             transposed_column = group[col].tolist()
             tags.extend(transposed_column)
         

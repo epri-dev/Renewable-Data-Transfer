@@ -21,6 +21,7 @@ dependencies = [
     "python-dateutil==2.9.0.post0",
     "python-dotenv==1.2.2",
     "pythonnet",
+    "pyodbc==5.3.0",
     "pytz==2026.1.post1",
     "six==1.17.0",
     "tqdm==4.67.3",

@@ -23,6 +23,8 @@ import logging
 # =============================================================================
 # Canary API Setup:
 conn = canary_api()
+SFTP_MAX_ATTEMPTS = 100
+SFTP_RETRY_DELAY_SECONDS = 30
 # =============================================================================
 # get_utc_time:-
 def get_utc_time(time_value):
@@ -541,7 +543,22 @@ def log_data_from_canary(tags, operating_state_tag, plant_level_tag, start_time,
             if os.path.exists(turbine_csv_path):
                 os.remove(turbine_csv_path)
         if SFTP_en:
-            sftp_success = upload_via_sftp(turbine_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+            sftp_success = False
+            for attempt in range(1, SFTP_MAX_ATTEMPTS + 1):
+                try:
+                    sftp_success = upload_via_sftp(turbine_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+                except Exception as e:
+                    logging.error(f'Turbine SFTP upload attempt {attempt} failed: {e}')
+                    sftp_success = False
+
+                if sftp_success:
+                    break
+                if attempt < SFTP_MAX_ATTEMPTS:
+                    logging.info(f'Retrying turbine SFTP in {SFTP_RETRY_DELAY_SECONDS} seconds (attempt {attempt + 1}/{SFTP_MAX_ATTEMPTS})')
+                    time.sleep(SFTP_RETRY_DELAY_SECONDS)
+
+            if not sftp_success:
+                logging.error('Turbine SFTP upload failed after max retries')
         else:
             sftp_success = False
             logging.info(
@@ -590,7 +607,20 @@ def log_data_from_canary(tags, operating_state_tag, plant_level_tag, start_time,
                 os.remove(plant_csv_path)
 
         if SFTP_en:
-            sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+            sftp_success = False
+            for attempt in range(1, SFTP_MAX_ATTEMPTS + 1):
+                try:
+                    sftp_success = upload_via_sftp(plant_zip_path, secret_path, log_sftp_path, SSH_KEY_PATH)
+                except Exception as e:
+                    logging.error(f'SFTP upload attempt {attempt} failed: {e}')
+                    sftp_success = False
+
+                if sftp_success:
+                    break
+                if attempt < SFTP_MAX_ATTEMPTS:
+                    logging.info(f'Retrying SFTP in {SFTP_RETRY_DELAY_SECONDS} seconds (attempt {attempt + 1}/{SFTP_MAX_ATTEMPTS})')
+                    time.sleep(SFTP_RETRY_DELAY_SECONDS)
+
             time.sleep(1)
             if sftp_success:
                 last_upload_time = plant_level_data['timestamp'].max()
